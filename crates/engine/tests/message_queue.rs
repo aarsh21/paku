@@ -15,15 +15,13 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 
-use zeron_doc::{
+use paku_doc::{
     MessagePart, MessageRole, QueueDeliveryGate, SessionCommandPayload, SessionMessageEntry,
 };
-use zeron_engine::doc_host::{
-    BeginQueueEditOutcome, FinishQueueEditAction, FinishQueueEditOutcome,
-};
-use zeron_engine::{EngineCore, HarnessRegistry};
-use zeron_harness::{Harness, HarnessError, RunControls};
-use zeron_proto::{
+use paku_engine::doc_host::{BeginQueueEditOutcome, FinishQueueEditAction, FinishQueueEditOutcome};
+use paku_engine::{EngineCore, HarnessRegistry};
+use paku_harness::{Harness, HarnessError, RunControls};
+use paku_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SteeringMode,
     UserInputQuestion,
 };
@@ -265,10 +263,10 @@ fn assemble_at(path: &std::path::Path, harness: Arc<HeldHarness>) -> EngineCore 
 }
 
 async fn create_chat(core: &EngineCore) {
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = paku_rpc::memory_client(core.rpc_service());
     client
         .call(
-            zeron_rpc::methods::MUTATE,
+            paku_rpc::methods::MUTATE,
             serde_json::json!({
                 "op": "createChat",
                 "chatId": CHAT,
@@ -607,7 +605,7 @@ async fn saturated_steering_mailbox_waits_without_restarting_or_losing_messages(
                     .steer(CHAT, &format!("burst {i}"), Some(format!("burst-{i}")))
                     .await
                     .unwrap(),
-                zeron_engine::SteerOutcome::Accepted
+                paku_engine::SteerOutcome::Accepted
             ));
         }
     });
@@ -670,7 +668,7 @@ async fn interrupt_bypasses_a_saturated_prompt_command_drain() {
                 .read_commands()
                 .unwrap()
                 .iter()
-                .any(|c| c.id == interrupt && c.status == zeron_doc::SessionCommandStatus::Applied)
+                .any(|c| c.id == interrupt && c.status == paku_doc::SessionCommandStatus::Applied)
         },
         "interrupt to bypass blocked prompts",
     )
@@ -697,7 +695,7 @@ async fn batched_remote_steers_preserve_every_message_in_order_exactly_once() {
     for (i, prompt) in expected.iter().enumerate() {
         handle
             .doc()
-            .queue_command(&zeron_doc::SessionCommandEntry {
+            .queue_command(&paku_doc::SessionCommandEntry {
                 id: format!("remote-command-{i}"),
                 payload: SessionCommandPayload::Steer {
                     prompt: prompt.clone(),
@@ -707,7 +705,7 @@ async fn batched_remote_steers_preserve_every_message_in_order_exactly_once() {
                 issued_at: now + i as i64,
                 based_on: None,
                 expires_at: None,
-                status: zeron_doc::SessionCommandStatus::Pending,
+                status: paku_doc::SessionCommandStatus::Pending,
                 resolution: None,
             })
             .unwrap();
@@ -730,7 +728,7 @@ async fn batched_remote_steers_preserve_every_message_in_order_exactly_once() {
             .read_commands()
             .unwrap()
             .iter()
-            .all(|c| c.status == zeron_doc::SessionCommandStatus::Applied)
+            .all(|c| c.status == paku_doc::SessionCommandStatus::Applied)
     );
     // Each turn end releases exactly the next one.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
@@ -803,7 +801,7 @@ async fn queued_text_waits_for_a_steerable_turn_even_with_legacy_policy() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn held_policy_keeps_a_steerable_message_visible_until_steer_now() {
     let (core, harness, prompts) = setup(SteeringMode::StepBoundary).await;
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = paku_rpc::memory_client(core.rpc_service());
 
     core.doc_host
         .queue_message(CHAT, "opening", Vec::new())
@@ -816,7 +814,7 @@ async fn held_policy_keeps_a_steerable_message_visible_until_steer_now() {
 
     let reply = client
         .call(
-            zeron_rpc::methods::QUEUE_MESSAGE,
+            paku_rpc::methods::QUEUE_MESSAGE,
             serde_json::json!({
                 "chatId": CHAT,
                 "text": "hold this",
@@ -832,7 +830,7 @@ async fn held_policy_keeps_a_steerable_message_visible_until_steer_now() {
 
     let reply = client
         .call(
-            zeron_rpc::methods::STEER_QUEUED_MESSAGE_NOW,
+            paku_rpc::methods::STEER_QUEUED_MESSAGE_NOW,
             serde_json::json!({ "chatId": CHAT, "id": id }),
         )
         .await
@@ -915,10 +913,10 @@ async fn steer_now_starts_the_next_turn_when_the_previous_turn_is_already_idle()
     )
     .await;
 
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = paku_rpc::memory_client(core.rpc_service());
     let reply = client
         .call(
-            zeron_rpc::methods::QUEUE_MESSAGE,
+            paku_rpc::methods::QUEUE_MESSAGE,
             serde_json::json!({
                 "chatId": CHAT,
                 "text": "after cancel",
@@ -1154,7 +1152,7 @@ async fn acknowledged_removal_cannot_materialize_after_turn_end() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn queue_rpc_reorders_and_streams() {
     let (core, harness, prompts) = setup(SteeringMode::TurnBoundary).await;
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = paku_rpc::memory_client(core.rpc_service());
 
     core.doc_host
         .queue_message(CHAT, "opening", Vec::new())
@@ -1167,7 +1165,7 @@ async fn queue_rpc_reorders_and_streams() {
 
     let mut rx = client
         .subscribe(
-            zeron_rpc::methods::WATCH_QUEUE,
+            paku_rpc::methods::WATCH_QUEUE,
             serde_json::json!({ "chatId": CHAT }),
         )
         .await
@@ -1185,7 +1183,7 @@ async fn queue_rpc_reorders_and_streams() {
     for text in ["a", "b", "c"] {
         client
             .call(
-                zeron_rpc::methods::QUEUE_MESSAGE,
+                paku_rpc::methods::QUEUE_MESSAGE,
                 serde_json::json!({ "chatId": CHAT, "text": text }),
             )
             .await
@@ -1206,7 +1204,7 @@ async fn queue_rpc_reorders_and_streams() {
         .clone();
     client
         .call(
-            zeron_rpc::methods::MOVE_QUEUED_MESSAGE,
+            paku_rpc::methods::MOVE_QUEUED_MESSAGE,
             serde_json::json!({ "chatId": CHAT, "id": last_id, "toIndex": 0 }),
         )
         .await
@@ -1215,7 +1213,7 @@ async fn queue_rpc_reorders_and_streams() {
 
     client
         .call(
-            zeron_rpc::methods::REMOVE_QUEUED_MESSAGE,
+            paku_rpc::methods::REMOVE_QUEUED_MESSAGE,
             serde_json::json!({ "chatId": CHAT, "id": last_id }),
         )
         .await
@@ -1330,7 +1328,7 @@ async fn a_message_holds_while_the_agent_waits_on_a_question() {
         || {
             core.sessions
                 .session_status(CHAT)
-                .is_some_and(|s| s.status == zeron_proto::SessionStatus::AwaitingInput)
+                .is_some_and(|s| s.status == paku_proto::SessionStatus::AwaitingInput)
         },
         "the agent to park on its question",
     )
@@ -1534,10 +1532,10 @@ async fn protected_edit_rpc_round_trips_its_camel_case_protocol() {
         .doc_host
         .queue_message(CHAT, "rpc edit", Vec::new())
         .expect("queue row");
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = paku_rpc::memory_client(core.rpc_service());
     let begin = client
         .call(
-            zeron_rpc::methods::BEGIN_QUEUED_MESSAGE_EDIT,
+            paku_rpc::methods::BEGIN_QUEUED_MESSAGE_EDIT,
             serde_json::json!({
                 "chatId": CHAT,
                 "id": id,
@@ -1552,7 +1550,7 @@ async fn protected_edit_rpc_round_trips_its_camel_case_protocol() {
 
     let finish = client
         .call(
-            zeron_rpc::methods::FINISH_QUEUED_MESSAGE_EDIT,
+            paku_rpc::methods::FINISH_QUEUED_MESSAGE_EDIT,
             serde_json::json!({
                 "chatId": CHAT,
                 "id": id,
@@ -1696,12 +1694,12 @@ async fn failed_queue_dispatch_stays_paused_until_explicit_retry() {
 async fn queued_turn_uses_current_config_at_turn_end_and_send_now() {
     for send_now in [false, true] {
         let (core, harness, prompts) = setup(SteeringMode::TurnBoundary).await;
-        let mut config = zeron_proto::ChatConfig {
+        let mut config = paku_proto::ChatConfig {
             harness: HarnessId::Mock,
             model: Some("old-model".into()),
             reasoning: Some(ReasoningLevel::Medium),
             model_options: Default::default(),
-            sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
+            sandbox: paku_proto::SandboxLevel::WorkspaceWrite,
         };
         core.workspace.set_chat_config(CHAT, &config).unwrap();
         core.doc_host
@@ -1786,29 +1784,29 @@ async fn pending_update_does_not_stall_another_chats_queue_flush() {
     const OTHER: &str = "chat-queue-other";
     let tmp = tempfile::tempdir().unwrap();
     let (updating, updating_prompts) =
-        HeldHarness::build_as(HarnessId::ClaudeCode, SteeringMode::TurnBoundary, false);
+        HeldHarness::build_as(HarnessId::Pi, SteeringMode::TurnBoundary, false);
     let (other, other_prompts) =
-        HeldHarness::build_as(HarnessId::Codex, SteeringMode::TurnBoundary, false);
+        HeldHarness::build_as(HarnessId::Mock, SteeringMode::TurnBoundary, false);
     let registry = Arc::new(HarnessRegistry::new());
     registry.register(updating.clone());
     registry.register(other.clone());
     let core = EngineCore::assemble(
         &tmp.path().join("data"),
         registry.clone(),
-        HarnessId::ClaudeCode,
+        HarnessId::Pi,
         None,
     )
     .expect("engine core assembles");
     create_chat(&core).await;
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = paku_rpc::memory_client(core.rpc_service());
     client
         .call(
-            zeron_rpc::methods::MUTATE,
+            paku_rpc::methods::MUTATE,
             serde_json::json!({
                 "op": "createChat",
                 "chatId": OTHER,
                 "deviceId": core.device_id,
-                "config": { "harness": "codex", "model": null, "reasoning": null, "sandbox": "workspace-write" },
+                "config": { "harness": "mock", "model": null, "reasoning": null, "sandbox": "workspace-write" },
             }),
         )
         .await
@@ -1831,16 +1829,16 @@ async fn pending_update_does_not_stall_another_chats_queue_flush() {
             .expect("queue follow-up");
     }
 
-    // Another Claude run keeps the accepted update waiting for idle.
-    let other_claude_run = registry.execution_lease(HarnessId::ClaudeCode).await;
-    registry.begin_update(HarnessId::ClaudeCode);
+    // Another scripted Pi run keeps the accepted update waiting for idle.
+    let other_pi_run = registry.execution_lease(HarnessId::Pi).await;
+    registry.begin_update(HarnessId::Pi);
     let writer = tokio::spawn({
         let registry = registry.clone();
-        async move { registry.update_lease(HarnessId::ClaudeCode).await }
+        async move { registry.update_lease(HarnessId::Pi).await }
     });
 
-    // Claude's turn ends first, so the watcher dispatches its held row before
-    // it reaches the Codex chat.
+    // Pi's turn ends first, so the watcher dispatches its held row before
+    // it reaches the Mock chat.
     let _ = updating.finish.send(());
     wait_for(
         || {
@@ -1861,23 +1859,23 @@ async fn pending_update_does_not_stall_another_chats_queue_flush() {
         "the unrelated chat's held row to flush while the update is pending",
     )
     .await;
-    assert!(registry.update_pending(HarnessId::ClaudeCode));
+    assert!(registry.update_pending(HarnessId::Pi));
     assert!(
         !updating_prompts.lock().unwrap().iter().any(|p| p == "next"),
         "the updating agent must not start a turn before its update"
     );
 
-    drop(other_claude_run);
+    drop(other_pi_run);
     drop(
         tokio::time::timeout(Duration::from_secs(5), writer)
             .await
             .expect("update acquires its gate once runs are idle")
             .unwrap(),
     );
-    registry.end_update(HarnessId::ClaudeCode);
+    registry.end_update(HarnessId::Pi);
     wait_for(
         || updating_prompts.lock().unwrap().iter().any(|p| p == "next"),
-        "the held Claude turn to start after the update",
+        "the held Pi turn to start after the update",
     )
     .await;
     let _ = updating.finish.send(());

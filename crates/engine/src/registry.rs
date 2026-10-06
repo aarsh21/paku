@@ -1,6 +1,6 @@
-//! HarnessRegistry — the engine's harness catalog: eager instances (mock) plus lazy
-//! slots resolved on first use (claude-code spawns subprocess discovery; codex/cursor
-//! later). Lazy slots carry a static descriptor so `ListHarnesses` never forces a spawn.
+//! HarnessRegistry — the engine's harness catalog: eager injected instances plus
+//! lazy slots resolved on first use. Production registers only native Pi RPC.
+//! Lazy slots carry a static descriptor so `ListHarnesses` never forces a spawn.
 //!
 //! Also owns the device's harness ENABLEMENT (Settings → Providers): which harnesses
 //! this device's composer offers, persisted in `{data_dir}/harness-prefs.json`.
@@ -13,8 +13,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use serde::{Deserialize, Serialize};
 
-use zeron_harness::{Harness, HarnessError, mock::MockHarness};
-use zeron_proto::{AgentEvent, DoneStatus, HarnessId, ReasoningLevel, SteeringMode};
+use paku_harness::{Harness, HarnessError};
+use paku_proto::{HarnessId, ReasoningLevel, SteeringMode};
 
 /// What `ListHarnesses` reports per harness.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,12 +54,10 @@ fn default_installed() -> bool {
     true
 }
 
-/// Whether detection alone may switch a harness on. The mock always "resolves"
-/// but is a test rig, and counting it would let the last real agent be turned
-/// off (the composer needs something it can actually run); the dev rig opts it
-/// in through `COMET_HARNESS=mock`, which bypasses enablement in the pickers.
+/// Mock remains injectable for tests but must never count as a runnable CLI
+/// when protecting the last enabled production harness.
 fn auto_enabled(id: HarnessId) -> bool {
-    id != HarnessId::Mock
+    id == HarnessId::Pi
 }
 
 /// A descriptor's effective enabled flag. `None` — a catalog from an engine
@@ -150,7 +148,7 @@ impl HarnessRegistry {
     pub async fn discover_models(
         &self,
         id: HarnessId,
-    ) -> Result<Vec<zeron_proto::Model>, HarnessError> {
+    ) -> Result<Vec<paku_proto::Model>, HarnessError> {
         let lease = Arc::new(self.execution_lease(id).await);
         self.discover_models_with_lease(id, lease).await
     }
@@ -161,7 +159,7 @@ impl HarnessRegistry {
         &self,
         id: HarnessId,
         lease: Arc<tokio::sync::OwnedRwLockReadGuard<()>>,
-    ) -> Result<Vec<zeron_proto::Model>, HarnessError> {
+    ) -> Result<Vec<paku_proto::Model>, HarnessError> {
         let harness = self.resolve(id)?;
         tokio::spawn(async move {
             // An RPC cancellation must not drop the gate before the probe's
@@ -177,7 +175,7 @@ impl HarnessRegistry {
         &self,
         id: HarnessId,
         cwd: &Path,
-    ) -> Result<Vec<zeron_proto::SlashCommand>, HarnessError> {
+    ) -> Result<Vec<paku_proto::SlashCommand>, HarnessError> {
         let cwd = cwd.to_owned();
         let lease = self.execution_lease(id).await;
         let harness = self.resolve(id)?;
@@ -195,7 +193,7 @@ impl HarnessRegistry {
         &self,
         id: HarnessId,
         cwd: &Path,
-    ) -> Result<Option<Vec<zeron_proto::invocation::Skill>>, HarnessError> {
+    ) -> Result<Option<Vec<paku_proto::invocation::Skill>>, HarnessError> {
         let cwd = cwd.to_owned();
         let lease = self.execution_lease(id).await;
         let harness = self.resolve(id)?;
@@ -436,7 +434,7 @@ impl HarnessRegistry {
 
     pub fn set_title_settings(&self, mut settings: TitleSettings) -> Result<(), String> {
         if let Some(id) = settings.harness {
-            if !zeron_harness::supports_titles(id) || !self.enabled_set().contains(&id) {
+            if !paku_harness::supports_titles(id) || !self.enabled_set().contains(&id) {
                 return Err("Choose an enabled harness that supports title generation".into());
             }
         } else if settings.model.is_some() {
@@ -514,190 +512,19 @@ impl HarnessRegistry {
                     None => return None,
                 };
                 descriptor.enabled = Some(enabled.contains(id));
-                descriptor.can_install = zeron_harness::install::can_install(*id);
+                descriptor.can_install = paku_harness::install::can_install(*id);
                 Some(descriptor)
             })
             .collect()
     }
 }
 
-/// The production registry: MockHarness (hidden from production pickers) plus a lazy
-/// `claude-code` slot resolved through `zeron_harness` on first use (subprocess
-/// discovery only happens when a run/model call actually needs it).
+/// The production registry: only Pi, resolved lazily on the first run/model call.
+/// Mock is available solely through explicit injection into a bare registry.
 pub fn default_registry() -> HarnessRegistry {
-    // Warm the login-shell PATH snapshot in the background so the first
-    // claude/codex resolve doesn't pay the shell-startup latency inline.
-    zeron_harness::shell_env::prewarm();
+    // Warm PATH discovery without delaying the first Pi request.
+    paku_harness::shell_env::prewarm();
     let registry = HarnessRegistry::new();
-    registry.register(Arc::new(MockHarness {
-        script: vec![
-            AgentEvent::TextDelta {
-                text: "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n".into(),
-            },
-            AgentEvent::TextDelta {
-                text: "1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n".into(),
-            },
-            AgentEvent::ToolCall {
-                id: "mock-tool-1".into(),
-                call: zeron_proto::ToolCall::Exec {
-                    command: "cargo test --workspace".into(),
-                },
-            },
-            AgentEvent::ToolResult {
-                id: "mock-tool-1".into(),
-                is_error: false,
-                output: None,
-                diff: None,
-            },
-            AgentEvent::ToolCall {
-                id: "mock-tool-2".into(),
-                call: zeron_proto::ToolCall::Exec {
-                    command: "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
-                        .into(),
-                },
-            },
-            AgentEvent::ToolResult {
-                id: "mock-tool-2".into(),
-                is_error: false,
-                output: None,
-                diff: None,
-            },
-            AgentEvent::TextDelta {
-                text: "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*".into(),
-            },
-            AgentEvent::Done {
-                status: DoneStatus::Completed,
-                result: None,
-                error: None,
-                session_id: None,
-            },
-        ],
-    }));
-    registry.register_lazy(
-        HarnessDescriptor {
-            id: HarnessId::ClaudeCode,
-            name: "Claude Code".into(),
-            supports_steering: true,
-            steering_mode: SteeringMode::StepBoundary,
-            // Must mirror ClaudeHarness exactly — the descriptor-stability
-            // rule (see the codex test below).
-            reasoning_levels: vec![
-                ReasoningLevel::Low,
-                ReasoningLevel::Medium,
-                ReasoningLevel::High,
-                ReasoningLevel::XHigh,
-                ReasoningLevel::Max,
-            ],
-            installed: true,
-            can_install: false,
-            enabled: None,
-        },
-        Box::new(|| zeron_harness::ClaudeHarness::new().installed()),
-        Box::new(|| Ok(Arc::new(zeron_harness::ClaudeHarness::new()) as Arc<dyn Harness>)),
-    );
-    // Codex, same lazy pattern: the static descriptor mirrors AcpHarness::codex()
-    // exactly (`describe()` after the first resolve must not change the
-    // catalog entry) — "Codex" per the original HARNESS_LABEL, StepBoundary
-    // steering via native `turn/steer`, and the unified reasoning ladder from
-    // zeron_harness::codex::catalog. CLI discovery only happens when a
-    // run/model call actually resolves the slot.
-    registry.register_lazy(
-        HarnessDescriptor {
-            id: HarnessId::Codex,
-            name: "Codex".into(),
-            supports_steering: true,
-            steering_mode: SteeringMode::StepBoundary,
-            reasoning_levels: vec![
-                ReasoningLevel::Minimal,
-                ReasoningLevel::Low,
-                ReasoningLevel::Medium,
-                ReasoningLevel::High,
-                ReasoningLevel::XHigh,
-                ReasoningLevel::Max,
-                ReasoningLevel::Ultra,
-            ],
-            installed: true,
-            can_install: false,
-            enabled: None,
-        },
-        Box::new(|| zeron_harness::CodexHarness::new().installed()),
-        Box::new(|| Ok(Arc::new(zeron_harness::CodexHarness::new()) as Arc<dyn Harness>)),
-    );
-    // Cursor via the pinned @cursor/sdk shim (NOT ACP — that surface strips
-    // subagent transcripts), same lazy pattern: the static descriptor mirrors
-    // CursorHarness exactly. Native step-boundary steering; no effort ladder.
-    registry.register_lazy(
-        HarnessDescriptor {
-            id: HarnessId::Cursor,
-            name: "Cursor".into(),
-            supports_steering: true,
-            steering_mode: SteeringMode::StepBoundary,
-            reasoning_levels: Vec::new(),
-            installed: true,
-            can_install: false,
-            enabled: None,
-        },
-        Box::new(|| zeron_harness::CursorHarness::new().installed()),
-        Box::new(|| Ok(Arc::new(zeron_harness::CursorHarness::new()) as Arc<dyn Harness>)),
-    );
-    // Devin over ACP (`devin acp`), same lazy pattern: the static descriptor
-    // mirrors AcpHarness::devin() exactly. No steering extension (turn
-    // boundaries) and no effort ladder — Devin bakes effort into the
-    // advertised model ids instead of a `thought_level` option.
-    registry.register_lazy(
-        HarnessDescriptor {
-            id: HarnessId::Devin,
-            name: "Devin".into(),
-            supports_steering: true,
-            steering_mode: SteeringMode::TurnBoundary,
-            reasoning_levels: Vec::new(),
-            installed: true,
-            can_install: false,
-            enabled: None,
-        },
-        Box::new(|| zeron_harness::AcpHarness::devin().installed()),
-        Box::new(|| Ok(Arc::new(zeron_harness::AcpHarness::devin()) as Arc<dyn Harness>)),
-    );
-    // Grok Build over ACP, same lazy pattern: the static descriptor mirrors
-    // AcpHarness::grok() exactly. No `_session/steering` extension yet, so
-    // steers deliver at turn boundaries; the effort ladder applies per
-    // session via the `thought_level` config option.
-    registry.register_lazy(
-        HarnessDescriptor {
-            id: HarnessId::Grok,
-            name: "Grok".into(),
-            supports_steering: true,
-            steering_mode: SteeringMode::TurnBoundary,
-            reasoning_levels: vec![
-                ReasoningLevel::Low,
-                ReasoningLevel::Medium,
-                ReasoningLevel::High,
-            ],
-            installed: true,
-            can_install: false,
-            enabled: None,
-        },
-        Box::new(|| zeron_harness::AcpHarness::grok().installed()),
-        Box::new(|| Ok(Arc::new(zeron_harness::AcpHarness::grok()) as Arc<dyn Harness>)),
-    );
-    // Hermes Agent over ACP (`hermes acp`), same lazy pattern: the static
-    // descriptor mirrors AcpHarness::hermes() exactly. No steering extension
-    // (turn boundaries) and no effort ladder — Hermes exposes no effort
-    // config over ACP today (hybrid reasoning is model-internal).
-    registry.register_lazy(
-        HarnessDescriptor {
-            id: HarnessId::Hermes,
-            name: "Hermes".into(),
-            supports_steering: true,
-            steering_mode: SteeringMode::TurnBoundary,
-            reasoning_levels: Vec::new(),
-            installed: true,
-            can_install: false,
-            enabled: None,
-        },
-        Box::new(|| zeron_harness::AcpHarness::hermes().installed()),
-        Box::new(|| Ok(Arc::new(zeron_harness::AcpHarness::hermes()) as Arc<dyn Harness>)),
-    );
     // Native Pi RPC. Thinking levels are discovered per model.
     registry.register_lazy(
         HarnessDescriptor {
@@ -710,51 +537,8 @@ pub fn default_registry() -> HarnessRegistry {
             can_install: false,
             enabled: None,
         },
-        Box::new(|| zeron_harness::PiHarness::new().installed()),
-        Box::new(|| Ok(Arc::new(zeron_harness::PiHarness::new()) as Arc<dyn Harness>)),
-    );
-    // opencode over its NATIVE HTTP/SSE protocol (the one the opencode
-    // desktop app speaks — `opencode serve` + the /global/event bus), same
-    // lazy pattern: the static descriptor mirrors OpencodeHarness exactly.
-    // Turn-boundary steering; the effort ladder rides model VARIANTS (the
-    // run sends the first advertised variant id for the picked level).
-    registry.register_lazy(
-        HarnessDescriptor {
-            id: HarnessId::Opencode,
-            name: "OpenCode".into(),
-            supports_steering: true,
-            steering_mode: SteeringMode::TurnBoundary,
-            reasoning_levels: vec![
-                ReasoningLevel::Low,
-                ReasoningLevel::Medium,
-                ReasoningLevel::High,
-                ReasoningLevel::XHigh,
-                ReasoningLevel::Max,
-            ],
-            installed: true,
-            can_install: false,
-            enabled: None,
-        },
-        Box::new(|| zeron_harness::OpencodeHarness::new().installed()),
-        Box::new(|| Ok(Arc::new(zeron_harness::OpencodeHarness::new()) as Arc<dyn Harness>)),
-    );
-    // antigravity over acp (google's agy_acp_server), same lazy pattern: the
-    // static descriptor mirrors AcpHarness::antigravity() exactly. No steering
-    // extension (turn boundaries), and effort is baked into the model ids, so
-    // the ladder lives on each model rather than the harness.
-    registry.register_lazy(
-        HarnessDescriptor {
-            id: HarnessId::Antigravity,
-            name: "Antigravity".into(),
-            supports_steering: true,
-            steering_mode: SteeringMode::TurnBoundary,
-            reasoning_levels: Vec::new(),
-            installed: true,
-            can_install: false,
-            enabled: None,
-        },
-        Box::new(|| zeron_harness::AcpHarness::antigravity().installed()),
-        Box::new(|| Ok(Arc::new(zeron_harness::AcpHarness::antigravity()) as Arc<dyn Harness>)),
+        Box::new(|| paku_harness::PiHarness::new().installed()),
+        Box::new(|| Ok(Arc::new(paku_harness::PiHarness::new()) as Arc<dyn Harness>)),
     );
     registry
 }
@@ -762,494 +546,232 @@ pub fn default_registry() -> HarnessRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paku_harness::mock::MockHarness;
+
+    fn descriptor(id: HarnessId) -> HarnessDescriptor {
+        HarnessDescriptor {
+            id,
+            name: format!("{id:?}"),
+            supports_steering: true,
+            steering_mode: SteeringMode::StepBoundary,
+            reasoning_levels: vec![],
+            installed: true,
+            can_install: false,
+            enabled: None,
+        }
+    }
+
+    /// An injected slot with a fixed probe and no real subprocess.
+    fn test_slot(registry: &HarnessRegistry, id: HarnessId, installed: bool) {
+        registry.register_lazy(
+            descriptor(id),
+            Box::new(move || installed),
+            Box::new(|| Err(HarnessError::NotInstalled("test slot".into()))),
+        );
+    }
 
     #[test]
     fn mid_turn_steering_requires_support_and_a_step_boundary() {
-        let mut descriptor = HarnessDescriptor {
-            id: HarnessId::Mock,
-            name: "Mock".into(),
-            supports_steering: true,
-            steering_mode: SteeringMode::StepBoundary,
-            reasoning_levels: Vec::new(),
-            installed: true,
-            can_install: false,
-            enabled: Some(true),
-        };
+        let mut descriptor = descriptor(HarnessId::Mock);
         assert!(descriptor.steers_mid_turn());
-
         descriptor.steering_mode = SteeringMode::TurnBoundary;
         assert!(!descriptor.steers_mid_turn());
-
         descriptor.steering_mode = SteeringMode::StepBoundary;
         descriptor.supports_steering = false;
         assert!(!descriptor.steers_mid_turn());
     }
 
     #[test]
-    fn lazy_slot_lists_without_resolving() {
+    fn lazy_slot_lists_without_resolving_and_caches_the_factory_result() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let registry = HarnessRegistry::new();
         let calls = Arc::new(AtomicUsize::new(0));
         let counted = calls.clone();
         registry.register_lazy(
-            HarnessDescriptor {
-                id: HarnessId::Mock,
-                name: "Lazy Mock".into(),
-                supports_steering: true,
-                steering_mode: SteeringMode::StepBoundary,
-                reasoning_levels: vec![],
-                installed: true,
-                can_install: false,
-                enabled: None,
-            },
+            descriptor(HarnessId::Mock),
             Box::new(|| false),
             Box::new(move || {
                 counted.fetch_add(1, Ordering::SeqCst);
-                Err(HarnessError::NotInstalled("nope".into()))
+                Ok(Arc::new(MockHarness { script: vec![] }))
             }),
         );
         let listed = registry.descriptors();
         assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].name, "Lazy Mock");
-        // The listing runs the probe, not the stored placeholder.
         assert!(!listed[0].installed);
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            0,
-            "listing must not force a resolve"
-        );
-        assert!(registry.resolve(HarnessId::Mock).is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        let first = registry.resolve(HarnessId::Mock).unwrap();
+        let second = registry.resolve(HarnessId::Mock).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
-    fn default_registry_lists_mock_claude_codex_and_grok_slots() {
+    fn default_registry_registers_only_pi_and_rejects_mock() {
         let registry = default_registry();
-        let ids: Vec<HarnessId> = registry.descriptors().iter().map(|d| d.id).collect();
-        assert_eq!(
-            ids,
-            vec![
-                HarnessId::Mock,
-                HarnessId::ClaudeCode,
-                HarnessId::Codex,
-                HarnessId::Cursor,
-                HarnessId::Devin,
-                HarnessId::Grok,
-                HarnessId::Hermes,
-                HarnessId::Pi,
-                HarnessId::Opencode,
-                HarnessId::Antigravity
-            ]
-        );
-        assert!(registry.resolve(HarnessId::Mock).is_ok());
-        assert!(registry.resolve(HarnessId::ClaudeCode).is_ok());
-        // A codex-configured chat resolves the right harness (construction is
-        // cheap; CLI discovery is deferred to models()/run()).
-        let codex = registry.resolve(HarnessId::Codex).unwrap();
-        assert_eq!(codex.id(), HarnessId::Codex);
-        // Grok resolves through the shared ACP harness; its descriptor must
-        // mirror the resolved harness (descriptor-stability rule).
-        let grok = registry.resolve(HarnessId::Grok).unwrap();
-        assert_eq!(grok.id(), HarnessId::Grok);
-        assert_eq!(grok.display_name(), "Grok");
-        assert_eq!(grok.steering_mode(), SteeringMode::StepBoundary);
-        assert_eq!(
-            grok.reasoning_levels(),
-            &[
-                ReasoningLevel::Low,
-                ReasoningLevel::Medium,
-                ReasoningLevel::High
-            ]
-        );
-        // Cursor, Devin, Hermes and Pi mirror their specs the same way.
-        let cursor = registry.resolve(HarnessId::Cursor).unwrap();
-        assert_eq!(cursor.id(), HarnessId::Cursor);
-        assert_eq!(cursor.display_name(), "Cursor");
-        assert_eq!(cursor.steering_mode(), SteeringMode::StepBoundary);
-        assert!(cursor.reasoning_levels().is_empty());
-        let devin = registry.resolve(HarnessId::Devin).unwrap();
-        assert_eq!(devin.id(), HarnessId::Devin);
-        assert_eq!(devin.display_name(), "Devin");
-        assert_eq!(devin.steering_mode(), SteeringMode::StepBoundary);
-        assert!(devin.reasoning_levels().is_empty());
-        let hermes = registry.resolve(HarnessId::Hermes).unwrap();
-        assert_eq!(hermes.id(), HarnessId::Hermes);
-        assert_eq!(hermes.display_name(), "Hermes");
-        assert_eq!(hermes.steering_mode(), SteeringMode::TurnBoundary);
-        assert!(hermes.reasoning_levels().is_empty());
-        let opencode = registry.resolve(HarnessId::Opencode).unwrap();
-        assert_eq!(opencode.id(), HarnessId::Opencode);
-        assert_eq!(opencode.display_name(), "OpenCode");
-        assert_eq!(opencode.steering_mode(), SteeringMode::StepBoundary);
-        assert_eq!(
-            opencode.reasoning_levels(),
-            &[
-                ReasoningLevel::Low,
-                ReasoningLevel::Medium,
-                ReasoningLevel::High,
-                ReasoningLevel::XHigh,
-                ReasoningLevel::Max,
-            ]
-        );
-        let antigravity = registry.resolve(HarnessId::Antigravity).unwrap();
-        assert_eq!(antigravity.id(), HarnessId::Antigravity);
-        assert_eq!(antigravity.display_name(), "Antigravity");
-        assert_eq!(antigravity.steering_mode(), SteeringMode::TurnBoundary);
-        assert!(antigravity.reasoning_levels().is_empty());
+        let ids: Vec<_> = registry.descriptors().into_iter().map(|d| d.id).collect();
+        assert_eq!(ids, vec![HarnessId::Pi]);
+        assert!(matches!(
+            registry.resolve(HarnessId::Mock),
+            Err(HarnessError::NotInstalled(_))
+        ));
         let pi = registry.resolve(HarnessId::Pi).unwrap();
         assert_eq!(pi.id(), HarnessId::Pi);
         assert_eq!(pi.display_name(), "Pi");
         assert_eq!(pi.steering_mode(), SteeringMode::StepBoundary);
         assert!(pi.reasoning_levels().is_empty());
+        assert_eq!(registry.descriptors().len(), 1);
     }
 
-    /// Catalogs serialized by engines that predate the `installed`/`enabled`
-    /// fields must keep deserializing — installed, and enabled per the
-    /// detection fallback.
+    #[test]
+    fn mock_remains_explicitly_injectable_but_never_enabled() {
+        let registry = HarnessRegistry::new();
+        registry.register(Arc::new(MockHarness { script: vec![] }));
+        assert_eq!(
+            registry.resolve(HarnessId::Mock).unwrap().id(),
+            HarnessId::Mock
+        );
+        assert!(registry.enabled_set().is_empty());
+        let mock = &registry.descriptors()[0];
+        assert!(mock.installed);
+        assert_eq!(mock.enabled, Some(false));
+        assert!(registry.set_enabled(HarnessId::Mock, true).is_err());
+        test_slot(&registry, HarnessId::Pi, true);
+        assert!(registry.set_enabled(HarnessId::Pi, false).is_err());
+    }
+
     #[test]
     fn descriptor_without_new_fields_parses_with_fallbacks() {
-        let parse = |id: &str| -> HarnessDescriptor {
-            serde_json::from_str(&format!(
-                r#"{{
-                    "id": "{id}",
-                    "name": "x",
-                    "supportsSteering": true,
-                    "steeringMode": "step-boundary",
-                    "reasoningLevels": []
-                }}"#
-            ))
-            .unwrap()
-        };
-        let claude = parse("claude-code");
-        assert!(claude.installed);
-        assert!(!claude.can_install);
-        assert_eq!(claude.enabled, None);
-        // Unknown enablement follows detection: a found CLI is offered...
-        assert!(descriptor_enabled(&claude));
-        // ...and one this device never found is not.
-        let missing = HarnessDescriptor {
+        let pi: HarnessDescriptor = serde_json::from_str(
+            r#"{"id":"pi","name":"Pi","supportsSteering":true,"steeringMode":"step-boundary","reasoningLevels":[]}"#,
+        ).unwrap();
+        assert!(pi.installed);
+        assert!(!pi.can_install);
+        assert_eq!(pi.enabled, None);
+        assert!(descriptor_enabled(&pi));
+        assert!(!descriptor_enabled(&HarnessDescriptor {
             installed: false,
-            can_install: false,
-            ..parse("grok")
-        };
-        assert!(!descriptor_enabled(&missing));
+            ..pi
+        }));
+        assert!(!descriptor_enabled(&descriptor(HarnessId::Mock)));
     }
 
-    /// A registry slot for the tests below: installed probe fixed, factory
-    /// never expected to run.
-    fn test_slot(registry: &HarnessRegistry, id: HarnessId, installed: bool) {
-        registry.register_lazy(
-            HarnessDescriptor {
-                id,
-                name: format!("{id:?}"),
-                supports_steering: true,
-                steering_mode: SteeringMode::StepBoundary,
-                reasoning_levels: vec![],
-                installed: true,
-                can_install: false,
-                enabled: None,
-            },
-            Box::new(move || installed),
-            Box::new(|| Err(HarnessError::NotInstalled("test slot".into()))),
-        );
-    }
-
-    /// `descriptors()` stamps the per-device enabled flag; `set_enabled`
-    /// guards the gate (no enabling missing CLIs, no disabling the last one)
-    /// and persists across a reload.
     #[test]
     fn enablement_stamps_guards_and_persists() {
         let dir = tempfile::tempdir().unwrap();
         let registry = HarnessRegistry::new();
         registry.load_prefs(dir.path());
-        test_slot(&registry, HarnessId::ClaudeCode, true);
-        test_slot(&registry, HarnessId::Codex, true);
-        test_slot(&registry, HarnessId::Grok, true);
-        test_slot(&registry, HarnessId::Hermes, false);
-
-        // Enablement follows detection: the three found CLIs are on with no
-        // prefs file at all, and the missing one is off.
-        let flags: Vec<(HarnessId, Option<bool>)> = registry
-            .descriptors()
-            .into_iter()
-            .map(|d| (d.id, d.enabled))
-            .collect();
-        assert_eq!(
-            flags,
-            vec![
-                (HarnessId::ClaudeCode, Some(true)),
-                (HarnessId::Codex, Some(true)),
-                (HarnessId::Grok, Some(true)),
-                (HarnessId::Hermes, Some(false)),
-            ]
-        );
-
-        // The gate: a missing CLI can't be enabled; unknown ids refuse.
-        assert!(registry.set_enabled(HarnessId::Hermes, true).is_err());
+        test_slot(&registry, HarnessId::Pi, false);
+        assert_eq!(registry.descriptors()[0].enabled, Some(false));
         assert!(registry.set_enabled(HarnessId::Pi, true).is_err());
         assert!(registry.set_enabled(HarnessId::Mock, true).is_err());
-        // Installed CLIs toggle both ways; no-op flips are fine.
-        registry.set_enabled(HarnessId::Grok, true).unwrap();
-        registry.set_enabled(HarnessId::Grok, true).unwrap();
-        registry.set_enabled(HarnessId::Codex, false).unwrap();
-        registry.set_enabled(HarnessId::ClaudeCode, false).unwrap();
-        // Grok is the last one standing — refusing keeps the composer usable.
-        assert!(registry.set_enabled(HarnessId::Grok, false).is_err());
-        assert_eq!(registry.enabled_set(), vec![HarnessId::Grok]);
+        registry.set_enabled(HarnessId::Pi, false).unwrap();
 
-        // A fresh registry over the same data dir reads the persisted opt-outs.
+        test_slot(&registry, HarnessId::Pi, true);
+        // A persisted opt-out may predate detection or last-harness protection.
+        registry.prefs().disabled = vec![HarnessId::Pi];
+        registry.persist_prefs();
+        assert!(registry.enabled_set().is_empty());
         let reloaded = HarnessRegistry::new();
+        test_slot(&reloaded, HarnessId::Pi, true);
         reloaded.load_prefs(dir.path());
-        test_slot(&reloaded, HarnessId::ClaudeCode, true);
-        test_slot(&reloaded, HarnessId::Codex, true);
-        test_slot(&reloaded, HarnessId::Grok, true);
-        assert_eq!(reloaded.enabled_set(), vec![HarnessId::Grok]);
+        assert!(reloaded.enabled_set().is_empty());
+        reloaded.set_enabled(HarnessId::Pi, true).unwrap();
+        reloaded.set_enabled(HarnessId::Pi, true).unwrap();
+        assert_eq!(reloaded.descriptors()[0].enabled, Some(true));
+        assert!(reloaded.set_enabled(HarnessId::Pi, false).is_err());
+        registry.load_prefs(dir.path());
+        assert_eq!(registry.enabled_set(), vec![HarnessId::Pi]);
     }
 
-    /// The point of following detection: an agent installed after the user has
-    /// already edited Settings turns itself on, while the ones they switched
-    /// off stay off. An allow-list can't express that — it can't tell "the
-    /// user said no" from "this wasn't installed yet".
     #[test]
-    fn newly_found_harnesses_enable_themselves_without_reviving_opt_outs() {
+    fn newly_found_pi_enables_itself_without_reviving_opt_outs() {
         use std::sync::atomic::{AtomicBool, Ordering};
         let dir = tempfile::tempdir().unwrap();
         let registry = HarnessRegistry::new();
         registry.load_prefs(dir.path());
-        test_slot(&registry, HarnessId::ClaudeCode, true);
-        test_slot(&registry, HarnessId::Codex, true);
-        // Not installed yet — the probe flips when the user installs the CLI.
         let found = Arc::new(AtomicBool::new(false));
-        let probe = Arc::clone(&found);
+        let probe = found.clone();
         registry.register_lazy(
-            HarnessDescriptor {
-                id: HarnessId::Grok,
-                name: "Grok".into(),
-                supports_steering: true,
-                steering_mode: SteeringMode::TurnBoundary,
-                reasoning_levels: vec![],
-                installed: true,
-                can_install: false,
-                enabled: None,
-            },
+            descriptor(HarnessId::Pi),
             Box::new(move || probe.load(Ordering::SeqCst)),
             Box::new(|| Err(HarnessError::NotInstalled("test slot".into()))),
         );
-        registry.set_enabled(HarnessId::Codex, false).unwrap();
-        assert_eq!(registry.enabled_set(), vec![HarnessId::ClaudeCode]);
-
-        // The CLI appears mid-session; no restart, no visit to Settings.
+        assert!(registry.enabled_set().is_empty());
         found.store(true, Ordering::SeqCst);
-        assert_eq!(
-            registry.enabled_set(),
-            vec![HarnessId::ClaudeCode, HarnessId::Grok]
-        );
-        // The opt-out survives the reload that picks the new agent up.
+        assert_eq!(registry.enabled_set(), vec![HarnessId::Pi]);
+        registry.prefs().disabled = vec![HarnessId::Pi];
+        registry.persist_prefs();
+        found.store(false, Ordering::SeqCst);
+        found.store(true, Ordering::SeqCst);
+        assert!(registry.enabled_set().is_empty());
         let reloaded = HarnessRegistry::new();
+        test_slot(&reloaded, HarnessId::Pi, true);
         reloaded.load_prefs(dir.path());
-        test_slot(&reloaded, HarnessId::ClaudeCode, true);
-        test_slot(&reloaded, HarnessId::Codex, true);
-        test_slot(&reloaded, HarnessId::Grok, true);
-        assert_eq!(
-            reloaded.enabled_set(),
-            vec![HarnessId::ClaudeCode, HarnessId::Grok]
-        );
+        assert!(reloaded.enabled_set().is_empty());
     }
 
     #[test]
-    fn antigravity_detection_ignores_legacy_opt_in_and_preserves_opt_out() {
-        let dir = tempfile::tempdir().unwrap();
-        let registry = HarnessRegistry::new();
-        registry.load_prefs(dir.path());
-        test_slot(&registry, HarnessId::ClaudeCode, true);
-        test_slot(&registry, HarnessId::Antigravity, true);
-        let prefs: HarnessPrefsFile =
-            serde_json::from_str(r#"{"optedIn":["antigravity"],"disabled":["antigravity"]}"#)
-                .unwrap();
-        *registry.prefs() = prefs;
-        assert_eq!(registry.enabled_set(), vec![HarnessId::ClaudeCode]);
-
-        registry.set_enabled(HarnessId::Antigravity, true).unwrap();
-        let both = vec![HarnessId::ClaudeCode, HarnessId::Antigravity];
-        assert_eq!(registry.enabled_set(), both);
-
-        let reloaded = HarnessRegistry::new();
-        reloaded.load_prefs(dir.path());
-        test_slot(&reloaded, HarnessId::ClaudeCode, true);
-        test_slot(&reloaded, HarnessId::Antigravity, true);
-        assert_eq!(reloaded.enabled_set(), both);
-
-        reloaded.set_enabled(HarnessId::Antigravity, false).unwrap();
-        assert_eq!(reloaded.enabled_set(), vec![HarnessId::ClaudeCode]);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn antigravity_detection_subprocess() {
-        let Ok(expected) = std::env::var("ZERON_TEST_AGY_INSTALLED") else {
-            return;
-        };
-        let registry = HarnessRegistry::new();
-        let data = tempfile::tempdir().unwrap();
-        registry.load_prefs(data.path());
-        registry.register(Arc::new(zeron_harness::AcpHarness::antigravity()));
-        let expected = expected == "true";
-        assert_eq!(registry.descriptors()[0].installed, expected);
-        assert_eq!(
-            registry.enabled_set().contains(&HarnessId::Antigravity),
-            expected
-        );
-        assert_eq!(descriptor_enabled(&registry.descriptors()[0]), expected);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn antigravity_server_path_controls_detection_and_enablement() {
-        use std::os::unix::fs::PermissionsExt;
-        let home = tempfile::tempdir().unwrap();
-        let bin = home.path().join("bin");
-        std::fs::create_dir(&bin).unwrap();
-        let cli = bin.join("agy");
-        std::fs::write(&cli, "#!/bin/sh\nexit 91\n").unwrap();
-        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let server = bin.join("agy_acp_server.par");
-        for installed in [false, true] {
-            if installed {
-                std::fs::write(&server, "#!/bin/sh\nexit 91\n").unwrap();
-                std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o755)).unwrap();
-            }
-            let output = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "registry::tests::antigravity_detection_subprocess",
-                    "--nocapture",
-                ])
-                .env("HOME", home.path())
-                .env("PATH", &bin)
-                .env_remove("ANTIGRAVITY_ACP_EXECUTABLE")
-                .env("ZERON_NO_LOGIN_SHELL", "1")
-                .env("ZERON_TEST_AGY_INSTALLED", installed.to_string())
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stdout)
+    fn legacy_allow_list_migrates_to_opt_outs() {
+        for (legacy, expected) in [
+            (r#"{"enabled":[]}"#, vec![]),
+            (r#"{"enabled":["pi"]}"#, vec![HarnessId::Pi]),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("harness-prefs.json"), legacy).unwrap();
+            let registry = HarnessRegistry::new();
+            test_slot(&registry, HarnessId::Pi, true);
+            test_slot(&registry, HarnessId::Mock, true);
+            registry.load_prefs(dir.path());
+            assert_eq!(registry.enabled_set(), expected);
+            let text = std::fs::read_to_string(dir.path().join("harness-prefs.json")).unwrap();
+            assert!(!text.contains("enabled"), "{text}");
+            let saved: HarnessPrefsFile = serde_json::from_str(&text).unwrap();
+            assert_eq!(
+                saved.disabled,
+                if expected.is_empty() {
+                    vec![HarnessId::Pi]
+                } else {
+                    vec![]
+                }
             );
         }
     }
 
-    /// The mock resolves on every machine, so detection alone would enable it
-    /// and let the last REAL agent be switched off — leaving a composer with
-    /// nothing runnable behind a guard that thinks it is covered.
-    #[test]
-    fn detection_never_enables_the_mock() {
-        let registry = default_registry();
-        let enabled = registry.enabled_set();
-        assert!(!enabled.contains(&HarnessId::Mock), "{enabled:?}");
-        let mock = registry
-            .descriptors()
-            .into_iter()
-            .find(|d| d.id == HarnessId::Mock)
-            .expect("mock slot");
-        assert!(mock.installed);
-        assert_eq!(mock.enabled, Some(false));
-    }
-
-    /// A prefs file from the fixed-default era is an allow-list: everything
-    /// registered and absent from it was a deliberate "no", so it converts to
-    /// opt-outs rather than silently re-enabling on the next launch.
-    #[test]
-    fn legacy_allow_list_migrates_to_opt_outs() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("harness-prefs.json"),
-            r#"{ "enabled": ["claude-code"] }"#,
-        )
-        .unwrap();
-        let registry = HarnessRegistry::new();
-        test_slot(&registry, HarnessId::ClaudeCode, true);
-        test_slot(&registry, HarnessId::Codex, true);
-        test_slot(&registry, HarnessId::Grok, true);
-        registry.load_prefs(dir.path());
-        assert_eq!(registry.enabled_set(), vec![HarnessId::ClaudeCode]);
-
-        // The rewritten file is the new shape, and the legacy key is gone.
-        let text = std::fs::read_to_string(dir.path().join("harness-prefs.json")).unwrap();
-        assert!(!text.contains("enabled"), "{text}");
-        assert!(text.contains("codex") && text.contains("grok"), "{text}");
-        // An agent registered after the migration is new, not a past "no".
-        test_slot(&registry, HarnessId::Cursor, true);
-        assert_eq!(
-            registry.enabled_set(),
-            vec![HarnessId::ClaudeCode, HarnessId::Cursor]
-        );
-    }
-
-    /// The fresh-machine shape (#128): no CLIs installed at all. Under
-    /// detection-based enablement nothing is enabled to begin with — no
-    /// dimmed default toggles to dismiss — and switching an uninstalled
-    /// harness "off" is a clean no-op, not an error.
     #[test]
     fn machine_without_clis_enables_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let registry = HarnessRegistry::new();
         registry.load_prefs(dir.path());
-        test_slot(&registry, HarnessId::ClaudeCode, false);
-        test_slot(&registry, HarnessId::Codex, false);
-
-        assert_eq!(registry.enabled_set(), Vec::<HarnessId>::new());
-        registry.set_enabled(HarnessId::Codex, false).unwrap();
-        registry.set_enabled(HarnessId::ClaudeCode, false).unwrap();
-        assert_eq!(registry.enabled_set(), Vec::<HarnessId>::new());
-
+        test_slot(&registry, HarnessId::Pi, false);
+        assert!(registry.enabled_set().is_empty());
+        registry.set_enabled(HarnessId::Pi, false).unwrap();
+        assert!(registry.enabled_set().is_empty());
         let reloaded = HarnessRegistry::new();
         reloaded.load_prefs(dir.path());
-        assert_eq!(reloaded.enabled_set(), Vec::<HarnessId>::new());
+        assert!(reloaded.enabled_set().is_empty());
     }
 
-    /// The Codex lazy descriptor must be indistinguishable from `describe()`
-    /// after the first resolve — otherwise the catalog entry silently changes
-    /// the moment the harness is used (name/ladder flip in the picker rail).
-    /// (KNOWN GAP, predates this slot: the claude-code descriptor advertises
-    /// `[Ultrathink]` while the resolved adapter reports `[Low..Max]` — left
-    /// as-is here; flagged for its own pass.)
     #[test]
-    fn codex_lazy_descriptor_matches_resolved_harness() {
+    fn pi_lazy_descriptor_matches_resolved_harness() {
         let registry = default_registry();
-        let before = registry
-            .descriptors()
-            .into_iter()
-            .find(|d| d.id == HarnessId::Codex)
-            .unwrap();
-        registry.resolve(HarnessId::Codex).unwrap();
-        let after = registry
-            .descriptors()
-            .into_iter()
-            .find(|d| d.id == HarnessId::Codex)
-            .unwrap();
+        let before = registry.descriptors().remove(0);
+        registry.resolve(HarnessId::Pi).unwrap();
+        let after = registry.descriptors().remove(0);
         assert_eq!(before.name, after.name);
         assert_eq!(before.supports_steering, after.supports_steering);
         assert_eq!(before.steering_mode, after.steering_mode);
         assert_eq!(before.reasoning_levels, after.reasoning_levels);
     }
-}
-
-#[cfg(test)]
-mod title_tests {
-    use super::*;
 
     #[test]
     fn title_preferences_persist_and_validate_harness_model_pairs() {
         let dir = tempfile::tempdir().unwrap();
         let registry = HarnessRegistry::new();
         registry.load_prefs(dir.path());
-        registry.register(Arc::new(
-            zeron_harness::ClaudeHarness::new().with_executable(std::env::current_exe().unwrap()),
-        ));
+        test_slot(&registry, HarnessId::Pi, true);
         let settings = TitleSettings {
-            harness: Some(HarnessId::ClaudeCode),
-            model: Some("haiku-test".into()),
+            harness: Some(HarnessId::Pi),
+            model: Some("small-test".into()),
         };
         registry.set_title_settings(settings.clone()).unwrap();
         let reloaded = HarnessRegistry::new();
@@ -1266,7 +788,7 @@ mod title_tests {
         assert!(
             registry
                 .set_title_settings(TitleSettings {
-                    harness: Some(HarnessId::Cursor),
+                    harness: Some(HarnessId::Mock),
                     model: None
                 })
                 .is_err()
@@ -1281,15 +803,16 @@ mod title_tests {
 
     #[test]
     fn old_harness_preferences_default_to_automatic_titles() {
-        let prefs: HarnessPrefsFile = serde_json::from_str(r#"{"disabled":["codex"]}"#).unwrap();
+        let prefs: HarnessPrefsFile = serde_json::from_str(r#"{"disabled":["pi"]}"#).unwrap();
         assert_eq!(prefs.titles, TitleSettings::default());
-        assert_eq!(prefs.disabled, vec![HarnessId::Codex]);
+        assert_eq!(prefs.disabled, vec![HarnessId::Pi]);
     }
 }
 
 #[cfg(test)]
 mod gate_tests {
     use super::*;
+    use paku_proto::AgentEvent;
 
     struct DiscoveryHarness {
         started: tokio::sync::Notify,
@@ -1298,7 +821,7 @@ mod gate_tests {
     #[async_trait::async_trait]
     impl Harness for DiscoveryHarness {
         fn id(&self) -> HarnessId {
-            HarnessId::Codex
+            HarnessId::Pi
         }
         fn display_name(&self) -> &str {
             "Discovery fixture"
@@ -1312,20 +835,20 @@ mod gate_tests {
         fn reasoning_levels(&self) -> &[ReasoningLevel] {
             &[]
         }
-        async fn models(&self) -> Result<Vec<zeron_proto::Model>, HarnessError> {
+        async fn models(&self) -> Result<Vec<paku_proto::Model>, HarnessError> {
             self.started.notify_one();
             self.release.notified().await;
             Ok(vec![])
         }
-        async fn commands(&self) -> Result<Vec<zeron_proto::SlashCommand>, HarnessError> {
+        async fn commands(&self) -> Result<Vec<paku_proto::SlashCommand>, HarnessError> {
             self.started.notify_one();
             self.release.notified().await;
             Ok(vec![])
         }
         async fn run(
             &self,
-            _: zeron_proto::RunRequest,
-            _: zeron_harness::RunControls,
+            _: paku_proto::RunRequest,
+            _: paku_harness::RunControls,
         ) -> Result<
             futures::stream::BoxStream<'static, Result<AgentEvent, HarnessError>>,
             HarnessError,
@@ -1344,18 +867,18 @@ mod gate_tests {
                 release: tokio::sync::Notify::new(),
             });
             registry.register(harness.clone());
-            registry.begin_update(HarnessId::Codex);
-            let installing = registry.update_lease(HarnessId::Codex).await;
+            registry.begin_update(HarnessId::Pi);
+            let installing = registry.update_lease(HarnessId::Pi).await;
             let caller = tokio::spawn({
                 let registry = registry.clone();
                 async move {
                     if commands {
                         registry
-                            .discover_commands(HarnessId::Codex, Path::new("/tmp"))
+                            .discover_commands(HarnessId::Pi, Path::new("/tmp"))
                             .await
                             .map(|_| ())
                     } else {
-                        registry.discover_models(HarnessId::Codex).await.map(|_| ())
+                        registry.discover_models(HarnessId::Pi).await.map(|_| ())
                     }
                 }
             });
@@ -1365,16 +888,16 @@ mod gate_tests {
                     .is_err()
             );
             drop(installing);
-            registry.end_update(HarnessId::Codex);
+            registry.end_update(HarnessId::Pi);
             tokio::time::timeout(Duration::from_secs(1), harness.started.notified())
                 .await
                 .unwrap();
             caller.abort();
             assert!(caller.await.unwrap_err().is_cancelled());
-            registry.begin_update(HarnessId::Codex);
+            registry.begin_update(HarnessId::Pi);
             let mut writer = tokio::spawn({
                 let registry = registry.clone();
-                async move { registry.update_lease(HarnessId::Codex).await }
+                async move { registry.update_lease(HarnessId::Pi).await }
             });
             assert!(
                 tokio::time::timeout(Duration::from_millis(30), &mut writer)
@@ -1388,22 +911,22 @@ mod gate_tests {
                     .unwrap()
                     .unwrap(),
             );
-            registry.end_update(HarnessId::Codex);
+            registry.end_update(HarnessId::Pi);
         }
     }
 
     #[tokio::test]
     async fn queued_update_writer_precedes_later_dispatches() {
         let registry = Arc::new(HarnessRegistry::new());
-        let running = registry.execution_lease(HarnessId::Codex).await;
-        registry.begin_update(HarnessId::Codex);
-        assert!(registry.update_pending(HarnessId::Codex));
+        let running = registry.execution_lease(HarnessId::Pi).await;
+        registry.begin_update(HarnessId::Pi);
+        assert!(registry.update_pending(HarnessId::Pi));
 
         let writer_registry = registry.clone();
         let (writer_acquired_tx, writer_acquired_rx) = tokio::sync::oneshot::channel();
         let (release_writer_tx, release_writer_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
-            let _writer = writer_registry.update_lease(HarnessId::Codex).await;
+            let _writer = writer_registry.update_lease(HarnessId::Pi).await;
             let _ = writer_acquired_tx.send(());
             let _ = release_writer_rx.await;
         });
@@ -1412,7 +935,7 @@ mod gate_tests {
         let reader_registry = registry.clone();
         let (reader_acquired_tx, reader_acquired_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
-            let _reader = reader_registry.execution_lease(HarnessId::Codex).await;
+            let _reader = reader_registry.execution_lease(HarnessId::Pi).await;
             let _ = reader_acquired_tx.send(());
         });
 
@@ -1429,25 +952,22 @@ mod gate_tests {
             "later reader jumped ahead of the queued update writer"
         );
         let _ = release_writer_tx.send(());
-        registry.end_update(HarnessId::Codex);
+        registry.end_update(HarnessId::Pi);
         reader_acquired_rx.await.unwrap();
-        assert!(!registry.update_pending(HarnessId::Codex));
+        assert!(!registry.update_pending(HarnessId::Pi));
     }
 
     #[test]
     fn update_marker_rejects_new_boundary_actions() {
         let registry = HarnessRegistry::new();
-        assert_eq!(
-            registry.while_update_clear(HarnessId::Codex, || 42),
-            Some(42)
-        );
-        registry.begin_update(HarnessId::Codex);
+        assert_eq!(registry.while_update_clear(HarnessId::Pi, || 42), Some(42));
+        registry.begin_update(HarnessId::Pi);
         let mut called = false;
         assert_eq!(
-            registry.while_update_clear(HarnessId::Codex, || called = true),
+            registry.while_update_clear(HarnessId::Pi, || called = true),
             None
         );
         assert!(!called);
-        registry.end_update(HarnessId::Codex);
+        registry.end_update(HarnessId::Pi);
     }
 }

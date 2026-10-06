@@ -1,4 +1,4 @@
-//! UniFFI facade over `zeron-client`: the account-scoped [`CoreClient`], the
+//! UniFFI facade over `paku-client`: the account-scoped [`CoreClient`], the
 //! per-chat [`SessionHandle`], the foreign [`ClientListener`], and the static
 //! helpers the platform needs before a client exists (sign-in, catalogs,
 //! formatting).
@@ -8,15 +8,17 @@
 //! awaited from Swift concurrency / Kotlin coroutines directly.
 //!
 //! Rust consumers inside this crate (the layout engine) reach the transcript
-//! through [`CoreClient::session_handle`] → [`zeron_client::SessionHandle`]
+//! through [`CoreClient::session_handle`] → [`paku_client::SessionHandle`]
 //! (`snapshot()` / `subscribe()`), never over FFI.
 
+#[cfg(test)]
+mod pi_only_tests;
 mod session;
 mod types;
 
 use std::sync::Arc;
 
-use zeron_client as zc;
+use paku_client as zc;
 
 pub use session::*;
 pub use types::*;
@@ -340,12 +342,16 @@ impl CoreClient {
             .await
             .unwrap_or_else(|_| zc::catalog::fallback_harnesses())
             .into_iter()
+            .filter(|h| h.id == "pi")
             .map(Into::into)
             .collect()
     }
 
     /// Model catalog for `harness` on `device_id` (normalized; static fallback).
     pub async fn list_models(&self, device_id: String, harness: String) -> Vec<ModelInfo> {
+        if !matches!(harness.as_str(), "pi" | "mock") {
+            return Vec::new();
+        }
         let client = self.client.clone();
         let fallback = harness.clone();
         on_runtime(async move { Ok(client.list_models(&device_id, &harness).await) })
@@ -370,7 +376,11 @@ impl CoreClient {
                 .register_push_target(
                     &token,
                     &environment,
-                    zc::PushPrefs { done: prefs.done, input: prefs.input, failed: prefs.failed },
+                    zc::PushPrefs {
+                        done: prefs.done,
+                        input: prefs.input,
+                        failed: prefs.failed,
+                    },
                 )
                 .await
         })
@@ -404,7 +414,12 @@ impl CoreClient {
         query: String,
     ) -> CoreResult<Vec<FileMatch>> {
         let client = self.client.clone();
-        let files = on_runtime(async move { client.search_files(&device_id, chat_id, space_id, &query).await }).await?;
+        let files = on_runtime(async move {
+            client
+                .search_files(&device_id, chat_id, space_id, &query)
+                .await
+        })
+        .await?;
         Ok(files
             .into_iter()
             .map(|f| FileMatch {
@@ -503,13 +518,13 @@ impl CoreClient {
 
 // ── static helpers ─────────────────────────────────────────────────────────
 
-/// Production edge base URL.
+/// Explicitly configured edge base URL; empty for an unconfigured/local-only app.
 #[uniffi::export]
-pub fn auth_production_edge_url() -> String {
-    zc::auth::PRODUCTION_EDGE_URL.to_owned()
+pub fn auth_configured_edge_url() -> String {
+    zc::auth::configured_edge_url()
 }
 
-/// OAuth callback scheme (`zeron`).
+/// OAuth callback scheme (`paku`).
 #[uniffi::export]
 pub fn auth_callback_scheme() -> String {
     zc::auth::CALLBACK_SCHEME.to_owned()
@@ -521,7 +536,7 @@ pub fn workos_authorize_url(state: String) -> String {
     zc::auth::workos_authorize_url(&state)
 }
 
-/// `code`/`state` (or the provider error) of a `zeron://callback?…` URL.
+/// `code`/`state` (or the provider error) of a `paku://callback?…` URL.
 #[uniffi::export]
 pub fn parse_auth_callback(url: String) -> Option<AuthCallback> {
     zc::auth::parse_auth_callback(&url).map(Into::into)
@@ -572,6 +587,7 @@ pub fn jwt_expiry(jwt: String) -> Option<i64> {
 pub fn fallback_harnesses() -> Vec<HarnessInfo> {
     zc::catalog::fallback_harnesses()
         .into_iter()
+        .filter(|h| h.id == "pi")
         .map(Into::into)
         .collect()
 }
@@ -579,6 +595,9 @@ pub fn fallback_harnesses() -> Vec<HarnessInfo> {
 /// Curated models for a harness (first = default).
 #[uniffi::export]
 pub fn fallback_models(harness: String) -> Vec<ModelInfo> {
+    if !matches!(harness.as_str(), "pi" | "mock") {
+        return Vec::new();
+    }
     zc::catalog::fallback_models(&harness)
         .into_iter()
         .map(Into::into)

@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <glib-unix.h>
 #include <json-glib/json-glib.h>
+#include <math.h>
 #include <signal.h>
 #include <stdint.h>
 #include <string.h>
@@ -551,7 +552,13 @@ static void command(JsonObject *o) {
     else if (!strcmp(cmd, "resize")) {
         guint w = CLAMP(number(o, "width"), 1, MAX_DIMENSION),
               h = CLAMP(number(o, "height"), 1, MAX_DIMENSION);
-        double scale = CLAMP(number(o, "scale"), 0.5, 4);
+        /* Effective GPUI scale includes native DPI and app zoom. Do not cap it
+         * independently: viewport pixels and reported caret coordinates must
+         * use exactly the scale requested by the Rust side. Physical dimensions
+         * remain bounded by MAX_DIMENSION above. */
+        double scale = number(o, "scale");
+        if (!isfinite(scale) || scale <= 0)
+            scale = 1;
         if (w != p->width || h != p->height || scale != p->scale) {
             p->width = w;
             p->height = h;

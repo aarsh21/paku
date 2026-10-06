@@ -21,7 +21,7 @@ pub(crate) fn init(root: PathBuf, cx: &mut App) {
     let directory = root.join("models/parakeet-tdt-0.6b-v3-int8");
     let card = cx.new(|_| VoiceCard {
         scroll: widgets::PageScroll::default(),
-        ready: zeron_voice::installed(&directory),
+        ready: paku_voice::installed(&directory),
         cache_present: directory.exists(),
         directory: directory.clone(),
         cancel: None,
@@ -45,7 +45,7 @@ pub(crate) fn enabled(cx: &App) -> bool {
 }
 pub(crate) fn card(cx: &mut App) -> Entity<VoiceCard> {
     if !cx.has_global::<VoiceGlobal>() {
-        init(std::env::temp_dir().join("zeron-voice-test"), cx);
+        init(std::env::temp_dir().join("paku-voice-test"), cx);
     }
     cx.global::<VoiceGlobal>().card.clone()
 }
@@ -67,7 +67,7 @@ pub(crate) struct VoiceCard {
 /// is visible so newly connected devices appear.
 #[derive(Default)]
 struct Inputs {
-    devices: Vec<zeron_voice::InputDevice>,
+    devices: Vec<paku_voice::InputDevice>,
     default: Option<String>,
     checked: Option<Instant>,
     task: Option<Task<()>>,
@@ -104,7 +104,7 @@ impl VoiceCard {
         let dir = self.directory.clone();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         std::thread::spawn(move || {
-            let r = zeron_voice::download(&dir, &cancel, |n| counter.store(n, Ordering::Relaxed))
+            let r = paku_voice::download(&dir, &cancel, |n| counter.store(n, Ordering::Relaxed))
                 .map_err(|_| {
                 if cancel.load(Ordering::Acquire) { "Download cancelled.".to_owned() }
                 else { "Couldn’t download or verify the model. Check your connection and free storage, then retry.".to_owned() }
@@ -156,13 +156,13 @@ impl VoiceCard {
         cx.notify();
     }
     fn remove(&mut self, cx: &mut Context<Self>) {
-        if zeron_voice::busy() {
+        if paku_voice::busy() {
             self.error = Some("Stop dictation before removing the model.".into());
             cx.notify();
             return;
         }
         self.set_enabled(false, cx);
-        zeron_voice::unload();
+        paku_voice::unload();
         match std::fs::remove_dir_all(&self.directory) {
             Ok(()) => {
                 self.cache_present = false;
@@ -204,8 +204,8 @@ impl VoiceCard {
         }
         let scan = cx.background_executor().spawn(async {
             (
-                zeron_voice::input_devices(),
-                zeron_voice::default_input_device(),
+                paku_voice::input_devices(),
+                paku_voice::default_input_device(),
             )
         });
         self.inputs.task = Some(cx.spawn(async move |this, cx| {
@@ -273,7 +273,7 @@ impl Render for VoiceCard {
         let enabled = settings::current(cx).dictation_enabled;
         let downloading = self.cancel.is_some();
         let on = downloading || (enabled && self.ready);
-        let size_mb = zeron_voice::download_size() as f64 / 1e6;
+        let size_mb = paku_voice::download_size() as f64 / 1e6;
         let meta = if downloading {
             Some(format!(
                 "Downloading · {:.0} of {size_mb:.0} MB",
@@ -319,7 +319,7 @@ impl Render for VoiceCard {
                         .h_full()
                         .rounded_full()
                         .w(gpui::relative(
-                            (self.progress as f32 / zeron_voice::download_size() as f32)
+                            (self.progress as f32 / paku_voice::download_size() as f32)
                                 .clamp(0.0, 1.0),
                         ))
                         .bg(theme.accent),
@@ -523,11 +523,11 @@ mod tests {
         let card = cx.update(card);
         card.update(cx, |card, _| {
             card.inputs.devices = vec![
-                zeron_voice::InputDevice {
+                paku_voice::InputDevice {
                     id: "coreaudio:built-in".into(),
                     name: "MacBook Pro Microphone".into(),
                 },
-                zeron_voice::InputDevice {
+                paku_voice::InputDevice {
                     id: "coreaudio:usb".into(),
                     name: "USB Microphone".into(),
                 },

@@ -4,6 +4,7 @@ mod mcp;
 mod normalize;
 mod rpc;
 mod sessions;
+mod title;
 mod ui;
 
 use crate::{
@@ -13,6 +14,7 @@ use crate::{
 use async_trait::async_trait;
 use futures::{StreamExt, stream::BoxStream};
 use normalize::{Normalizer, string};
+use paku_proto::{AgentEvent, HarnessId, Model, ReasoningLevel, RunRequest, SteeringMode};
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -23,7 +25,6 @@ use tokio::{
     io::{AsyncBufReadExt, BufReader},
     sync::mpsc,
 };
-use zeron_proto::{AgentEvent, HarnessId, Model, ReasoningLevel, RunRequest, SteeringMode};
 
 pub struct PiHarness {
     models_cache: crate::catalog::Catalog,
@@ -60,7 +61,7 @@ impl PiHarness {
         self
     }
     /// Pi's settings/credentials directory (`PI_CODING_AGENT_DIR`) for the
-    /// child and for Zeron's own reads of it; defaults to the inherited one.
+    /// child and for Paku's own reads of it; defaults to the inherited one.
     pub fn with_agent_dir(mut self, path: impl Into<PathBuf>) -> Self {
         self.agent_dir = Some(path.into());
         self
@@ -116,7 +117,7 @@ impl PiHarness {
         &self,
         cwd: &Path,
         args: &[String],
-        mcp: Option<&zeron_proto::McpServer>,
+        mcp: Option<&paku_proto::McpServer>,
     ) -> Result<Process, HarnessError> {
         let exe = self.resolve_executable()?;
         if self.executable.is_none() {
@@ -129,7 +130,7 @@ impl PiHarness {
             }
         }
         let mut cmd = Command::new(&exe);
-        // Process group plus the same env scrubbing the ACP launch applied.
+        // Own the process group and scrub inherited nested-agent markers.
         crate::process::owned::configure(&mut cmd);
         crate::compose_child_path(&mut cmd, &exe);
         if let Some(dir) = &self.agent_dir {
@@ -271,9 +272,12 @@ impl Harness for PiHarness {
     fn model_context(&self) -> Result<Option<crate::ModelContext>, HarnessError> {
         let root = sessions::agent_dir(self.agent_dir.clone());
         crate::model_context::context(
-            HarnessId::Pi,
             &self.resolve_executable()?,
-            &[root.join("models.json"), root.join("settings.json")],
+            &[
+                root.join("auth.json"),
+                root.join("models.json"),
+                root.join("settings.json"),
+            ],
         )
         .map(Some)
     }
@@ -290,13 +294,13 @@ impl Harness for PiHarness {
             )
             .await
     }
-    async fn commands(&self) -> Result<Vec<zeron_proto::SlashCommand>, HarnessError> {
+    async fn commands(&self) -> Result<Vec<paku_proto::SlashCommand>, HarnessError> {
         self.commands_for(&std::env::current_dir()?).await
     }
     async fn commands_for(
         &self,
         cwd: &Path,
-    ) -> Result<Vec<zeron_proto::SlashCommand>, HarnessError> {
+    ) -> Result<Vec<paku_proto::SlashCommand>, HarnessError> {
         self.workspace_commands
             .get(cwd, async {
                 Ok(catalog::commands(&self.probe(cwd, false).await?))
@@ -306,10 +310,11 @@ impl Harness for PiHarness {
     async fn skills(
         &self,
         cwd: &Path,
-    ) -> Result<Option<Vec<zeron_proto::invocation::Skill>>, HarnessError> {
-        let mut skills = crate::skills::discover(HarnessId::Pi, cwd).await?;
+    ) -> Result<Option<Vec<paku_proto::invocation::Skill>>, HarnessError> {
+        let mut skills =
+            crate::skills::discover(cwd, sessions::agent_dir(self.agent_dir.clone())).await?;
         let commands = self.commands_for(cwd).await?;
-        crate::skills::attach_advertised_commands(HarnessId::Pi, &mut skills, &commands);
+        crate::skills::attach_advertised_commands(&mut skills, &commands);
         Ok(Some(skills))
     }
     fn fallback_models(&self) -> Vec<Model> {
@@ -320,6 +325,13 @@ impl Harness for PiHarness {
             reasoning_levels: vec![],
             options: vec![],
         }]
+    }
+    async fn run_title(
+        &self,
+        request: RunRequest,
+        controls: RunControls,
+    ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        self.title(request, controls).await
     }
     async fn run(
         &self,
@@ -389,6 +401,7 @@ impl Harness for PiHarness {
             if let Err(error) = result {
                 let status = runner.process.child.try_wait().ok().flatten();
                 runner.norm.error = Some(if status.is_some() {
+                    runner.process.tail.wait_closed().await;
                     crate::crash_message("Pi", status, &runner.process.tail)
                 } else {
                     error.to_string()
@@ -462,7 +475,7 @@ impl Runner {
         self.process.dialogs.cancel();
         self.emit(AgentEvent::Done {
             status: if self.interrupted {
-                zeron_proto::DoneStatus::Interrupted
+                paku_proto::DoneStatus::Interrupted
             } else {
                 self.norm.status()
             },
@@ -507,7 +520,7 @@ impl Runner {
         self.submit(text, images, false)
     }
     async fn bootstrap(&mut self, backlog: &mut Vec<Value>) -> Result<Value, HarnessError> {
-        // Pi defaults to one-at-a-time. Zeron's pending steers belong together
+        // Pi defaults to one-at-a-time. Paku's pending steers belong together
         // at the next model step. Pi persists this in its global settings, so
         // select it only while no mode is configured: an explicit choice (the
         // user's, or `/steering` in a chat) is never overwritten.
@@ -614,7 +627,7 @@ impl Runner {
         steering: &mut mpsc::Receiver<crate::SteerMessage>,
     ) -> Result<(), HarnessError> {
         let mut backlog = vec![];
-        // Same budget the ACP handshake gave Pi: extensions can start cold.
+        // Extensions can start cold; startup has a bounded two-minute budget.
         let state = tokio::time::timeout(Duration::from_secs(120), self.bootstrap(&mut backlog))
             .await
             .map_err(|_| HarnessError::Protocol("Pi startup timed out".into()))??;
@@ -953,7 +966,7 @@ impl Runner {
         Ok(())
     }
 }
-/// Inline attachments as native image blocks, best-effort like the Claude
+/// Inline attachments as native image blocks, best-effort like the composer
 /// driver: the path refs already ride the prompt text, so an unreadable,
 /// oversized or non-inlinable file (SVG, HEIC, TIFF, ...) must not fail the turn.
 async fn load_images(paths: &[String]) -> Value {

@@ -1,24 +1,13 @@
-//! A private temp root for one managed adapter run.
+//! Private temporary directories for Pi's MCP bridge and restricted title runs.
 //!
-//! Archive-installed adapters ship as PyInstaller one-file bundles. The bundle
-//! bootloader unpacks its payload (the Antigravity adapter unpacks ~1 GB) into
-//! a fresh `_MEI<random>` directory under the child's temp root on every
-//! launch, and removes that directory only when the bootloader process exits
-//! normally. Adapters are reaped through `TerminateJobObject`, which skips that
-//! path entirely, so the unpack directory outlives the run and accumulates on
-//! disk — one gigabyte per Antigravity session.
-//!
-//! Pointing the child's temp variables at a directory this process owns moves
-//! the payload somewhere it can delete itself once the job is gone. Removal is
-//! retried briefly: the guard drops after the job is terminated, but the killed
-//! processes may still be closing handles on the way out.
+//! The guard owns cleanup after the subprocess is reaped. Removal retries handle
+//! processes that are still closing file handles during shutdown.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-/// Temp variables the child reads to pick its unpack location. `TMPDIR` is the
-/// Unix name PyInstaller honors; `TEMP`/`TMP` are the Windows pair.
+/// Standard child temporary-directory variables on Unix and Windows.
 const TEMP_VARS: [&str; 3] = ["TEMP", "TMP", "TMPDIR"];
 
 /// How long to keep retrying a removal the child is still holding open.
@@ -36,7 +25,7 @@ pub(crate) struct ScratchDir {
 impl ScratchDir {
     /// Create a uniquely named temp root for a single child process. The label
     /// only aids debugging; the pid and a process-local counter keep concurrent
-    /// runs of the same adapter apart.
+    /// runs apart.
     pub(crate) fn new(label: &str) -> std::io::Result<Self> {
         let label: String = label
             .chars()
@@ -44,7 +33,7 @@ impl ScratchDir {
             .collect();
         loop {
             let path = std::env::temp_dir().join(format!(
-                "zeron-{label}-{}-{}",
+                "paku-{label}-{}-{}",
                 std::process::id(),
                 NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed)
             ));
@@ -86,7 +75,7 @@ impl Drop for ScratchDir {
                         tracing::warn!(
                             path = %self.path.display(),
                             %error,
-                            "could not remove adapter scratch directory"
+                            "could not remove Pi scratch directory"
                         );
                     } else {
                         std::thread::sleep(REMOVAL_BACKOFF);

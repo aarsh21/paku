@@ -1,29 +1,35 @@
 #!/usr/bin/env bash
 # Two-device e2e smoke: real edge (wrangler dev), two headless engines, and the
-# zeron-rpc e2e_driver example proving the doc-queued cross-device command path:
+# paku-rpc e2e_driver example proving the doc-queued cross-device command path:
 #
 #   B queues a Run into the chat doc -> nudge -> A (host) executes via the mock
 #   harness -> transcript + session status sync A -> edge -> B.
 #
-# Both engines run as the SAME user (alice@org1) on different devices — zeron's
+# Both engines run as the SAME user (alice@org1) on different devices — paku's
 # one-user-many-devices model; chat/device rooms are claim-on-first-join per user.
 #
 # Usage: scripts/e2e-smoke.sh
-# Env:   ZERON_E2E_EDGE_PORT (default 27640), ZERON_E2E_KEEP_LOGS=1 to keep logs.
+# Env:   PAKU_E2E_EDGE_PORT / PAKU_E2E_A_PORT / PAKU_E2E_B_PORT override
+#        automatic free ports; PAKU_E2E_KEEP_LOGS=1 preserves logs, and
+#        PAKU_E2E_LOG_ROOT puts the unique log directory beneath an evidence root.
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 command -v cargo >/dev/null 2>&1 || PATH="$HOME/.cargo/bin:$PATH"
-EDGE_PORT="${ZERON_E2E_EDGE_PORT:-27640}"
+free_port() {
+  node -e 'const s=require("node:net").createServer();s.listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close();});'
+}
+EDGE_PORT="${PAKU_E2E_EDGE_PORT:-$(free_port)}"
 EDGE_URL="http://localhost:${EDGE_PORT}"
 TOKEN="alice@org1"
 ORG="org1"
-A_PORT=27801
-B_PORT=27802
-A_DIR=/tmp/e2e-a
-B_DIR=/tmp/e2e-b
-LOG_DIR="$(mktemp -d /tmp/zeron-e2e-logs.XXXXXX)"
+A_PORT="${PAKU_E2E_A_PORT:-$(free_port)}"
+B_PORT="${PAKU_E2E_B_PORT:-$(free_port)}"
+A_DIR="$(mktemp -d /tmp/paku-e2e-a.XXXXXX)"
+B_DIR="$(mktemp -d /tmp/paku-e2e-b.XXXXXX)"
+mkdir -p "${PAKU_E2E_LOG_ROOT:-/tmp}"
+LOG_DIR="$(mktemp -d "${PAKU_E2E_LOG_ROOT:-/tmp}/paku-e2e-logs.XXXXXX")"
 
 EDGE_PID=""
 A_PID=""
@@ -50,7 +56,7 @@ cleanup() {
     echo "--- engine B log (tail) ---"; tail -n 40 "$LOG_DIR/engine-b.log" 2>/dev/null || true
     echo "--- edge log (tail) ---"; tail -n 40 "$LOG_DIR/edge.log" 2>/dev/null || true
   fi
-  if [[ "${ZERON_E2E_KEEP_LOGS:-0}" != "1" ]]; then
+  if [[ "${PAKU_E2E_KEEP_LOGS:-0}" != "1" ]]; then
     rm -rf "$LOG_DIR"
   else
     echo "logs kept in $LOG_DIR"
@@ -79,7 +85,7 @@ else
   # Monitor mode gives the background job its own process group on both macOS
   # and Linux, without depending on the Linux-only `setsid` utility.
   set -m
-  bash -c "cd '$ROOT/edge' && exec npx wrangler dev --port '$EDGE_PORT' --var AUTH_MODE:dev" \
+  bash -c "cd '$ROOT/edge' && exec npx wrangler dev --port '$EDGE_PORT' --persist-to '$LOG_DIR/edge-state' --var AUTH_MODE:dev" \
     >"$LOG_DIR/edge.log" 2>&1 &
   EDGE_PID=$!
   set +m
@@ -87,13 +93,13 @@ else
 fi
 
 # ── 2. Build the binaries (workspace target is warm in CI/dev) ─────────────────
-echo "build: zeron + e2e_driver"
+echo "build: paku + e2e_driver"
 # Two invocations: a single one with `--example` builds ONLY the example
-# (the target filter applies across every -p), silently skipping the zeron
+# (the target filter applies across every -p), silently skipping the paku
 # bin — the smoke then dies on "No such file or directory".
-(cd "$ROOT" && cargo build -q -p zeron)
-(cd "$ROOT" && cargo build -q -p zeron-rpc --example e2e_driver)
-ZERON="$ROOT/target/debug/zeron"
+(cd "$ROOT" && cargo build -q -p paku)
+(cd "$ROOT" && cargo build -q -p paku-rpc --example e2e_driver)
+PAKU="$ROOT/target/debug/paku"
 DRIVER="$ROOT/target/debug/examples/e2e_driver"
 
 # ── 3. Two headless engines, one user, two devices ─────────────────────────────
@@ -101,10 +107,10 @@ rm -rf "$A_DIR" "$B_DIR"
 mkdir -p "$A_DIR" "$B_DIR"
 
 start_engine() { # start_engine <data_dir> <ipc_port> <name> <log>
-  ZERON_DATA_DIR="$1" ZERON_IPC_PORT="$2" ZERON_DEVICE_NAME="$3" \
-    ZERON_EDGE_URL="$EDGE_URL" ZERON_EDGE_TOKEN="$TOKEN" ZERON_ORG_ID="$ORG" \
-    ZERON_HARNESS=mock RUST_LOG=info \
-    "$ZERON" headless >"$4" 2>&1 &
+  PAKU_DATA_DIR="$1" PAKU_IPC_PORT="$2" PAKU_DEVICE_NAME="$3" \
+    PAKU_EDGE_URL="$EDGE_URL" PAKU_EDGE_TOKEN="$TOKEN" PAKU_ORG_ID="$ORG" \
+    PAKU_HARNESS=mock RUST_LOG=info \
+    "$PAKU" headless >"$4" 2>&1 &
 }
 
 start_engine "$A_DIR" "$A_PORT" "e2e-device-a" "$LOG_DIR/engine-a.log"; A_PID=$!

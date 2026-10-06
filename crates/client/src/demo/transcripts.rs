@@ -4,8 +4,8 @@
 //! groups, questions, errors, attachments), the synthetic big transcripts
 //! for benchmarks, and the scripted streaming reply.
 
-use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry, ToolDiffStat};
-use zeron_proto::{TodoItem, TodoStatus, ToolCall, UserInputQuestion};
+use paku_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry, ToolDiffStat};
+use paku_proto::{TodoItem, TodoStatus, ToolCall, UserInputQuestion};
 
 pub(crate) const PHONE: &str = "ios-demo";
 
@@ -101,14 +101,9 @@ fn assistant(id: &str, host: &str, at: i64, parts: Vec<MessagePart>) -> SessionM
 
 /// Paths the demo serves generated images for.
 pub(crate) const DEMO_IMAGES: &[(&str, u32, u32, u32)] = &[
-    (
-        "/Users/dev/.zeron/uploads/4f1c9a2e-Image_1.png",
-        960,
-        540,
-        1,
-    ),
-    ("/Users/dev/.zeron/uploads/scroll-tall.png", 400, 800, 2),
-    ("/Users/dev/.zeron/uploads/square.png", 600, 600, 3),
+    ("/Users/dev/.paku/uploads/4f1c9a2e-Image_1.png", 960, 540, 1),
+    ("/Users/dev/.paku/uploads/scroll-tall.png", 400, 800, 2),
+    ("/Users/dev/.paku/uploads/square.png", 600, 600, 3),
 ];
 
 const VEIL_PLAN: &str = r#"## Veil port plan
@@ -150,7 +145,7 @@ pub fn veil_alpha(elapsed_ms: f32, duration_ms: f32) -> f32 {
 }
 ```
 
-The row keeps one `RowVeil` while streaming and drops it on the live→complete flip, exactly like the desktop lifecycle. Details in [the veil design note](https://github.com/zeron-sh/zeron/blob/main/docs/design/transcript-veil.md#lifecycle)."#;
+The row keeps one `RowVeil` while streaming and drops it on the live→complete flip, exactly like the desktop lifecycle. Details in [the veil design note](https://github.com/paku-sh/paku/blob/main/docs/design/transcript-veil.md#lifecycle)."#;
 
 const CJK_REPLY: &str = r#"### Grapheme-safe fading
 
@@ -168,7 +163,7 @@ Chunk boundaries now snap to **extended grapheme clusters**, so these all fade a
 | Emoji ZWJ | 👨‍👩‍👧‍👦 | 1 |
 | Flags | 🇨🇦🇯🇵 | 2 |
 
-The splitter lives in `/Users/dev/zeron/crates/ui/src/markdown/veil/grapheme_boundaries_for_streamed_chunks.rs` and is covered by a table test:
+The splitter lives in `/Users/dev/paku/crates/ui/src/markdown/veil/grapheme_boundaries_for_streamed_chunks.rs` and is covered by a table test:
 
 ```python
 CASES = [
@@ -194,8 +189,8 @@ const VEIL_LIVE_PREFIX: &str = "All 14 veil tests pass. Pushing `veil-fade` and"
 /// The remainder `chat-veil`'s live entry streams when the session opens.
 pub(crate) const VEIL_LIVE_REST: &str = r#" opening the pull request against `main`:
 
-- [x] `cargo test -p zeron-ui veil` — 14 passed
-- [x] `xcodebuild -scheme Zeron build`
+- [x] `cargo test -p paku-ui veil` — 14 passed
+- [x] `xcodebuild -scheme Paku build`
 - [ ] Screenshots for the PR description
 
 ```bash
@@ -203,24 +198,24 @@ git push -u origin veil-fade
 gh pr create --base main --title "Stream pull request status on every client"
 ```
 
-PR **#90** is open: https://github.com/zeron-sh/zeron/pull/90"#;
+PR **#90** is open: https://github.com/paku-sh/paku/pull/90"#;
 
 fn veil(host: &str, now: i64) -> Vec<SessionMessageEntry> {
     // Sent from the desktop composer: file, folder and skill chips, plus the
     // image and recording it attached, each mentioned by its chip.
-    let review = zeron_proto::invocation::Invocation::Skill {
+    let review = paku_proto::invocation::Invocation::Skill {
         name: "review".into(),
-        path: "/Users/dev/.claude/skills/review/SKILL.md".into(),
+        path: "/Users/dev/.pi/agent/skills/review/SKILL.md".into(),
         command: None,
     };
     let attach = crate::attachments::with_attachments(
         &format!(
-            "Port the streaming fade-in veil from [transcript.rs](zeron-file:crates/ui/src/transcript.rs) into [Transcript](zeron-file:apps/ios/Zeron/Transcript/). It must never affect layout — opacity only, split at chunk boundaries. Here's how it looks today: [Image 1](zeron-image:1), and the fade is in [veil-recording.zip](zeron-attachment:2). Run {} when done.",
+            "Port the streaming fade-in veil from [transcript.rs](paku-file:crates/ui/src/transcript.rs) into [Transcript](paku-file:apps/ios/Paku/Transcript/). It must never affect layout — opacity only, split at chunk boundaries. Here's how it looks today: [Image 1](paku-image:1), and the fade is in [veil-recording.zip](paku-attachment:2). Run {} when done.",
             review.link()
         ),
         &[
             DEMO_IMAGES[0].0.to_owned(),
-            "/Users/dev/.zeron/uploads/7d03b6e1-veil-recording.zip".to_owned(),
+            "/Users/dev/.paku/uploads/7d03b6e1-veil-recording.zip".to_owned(),
         ],
     );
     let mut live = assistant(
@@ -231,7 +226,7 @@ fn veil(host: &str, now: i64) -> Vec<SessionMessageEntry> {
             text("t0", "Opening the PR now. Running the checks first:"),
             tool(
                 "k1",
-                exec("cargo test -p zeron-ui veil -- --nocapture"),
+                exec("cargo test -p paku-ui veil -- --nocapture"),
                 false,
                 Some("test result: ok. 14 passed; 0 failed; 0 ignored"),
             ),
@@ -262,11 +257,11 @@ fn veil(host: &str, now: i64) -> Vec<SessionMessageEntry> {
                     false,
                     Some("crates/ui/src/markdown/veil.rs:12: pub const VEIL_MIN_FADE_MS"),
                 ),
-                edit("k3", "apps/ios/Zeron/Transcript/Veil.swift", 84, 12),
+                edit("k3", "apps/ios/Paku/Transcript/Veil.swift", 84, 12),
                 tool(
                     "k4",
                     exec(
-                        "xcodebuild -scheme Zeron -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build",
+                        "xcodebuild -scheme Paku -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build",
                     ),
                     false,
                     Some("** BUILD SUCCEEDED **"),
@@ -377,11 +372,12 @@ fn picker(host: &str, now: i64) -> Vec<SessionMessageEntry> {
                         UserInputQuestion {
                             id: "q2".into(),
                             header: "Harnesses".into(),
-                            question: "Which harnesses should the picker offer on phones?".into(),
+                            question: "Which Pi model providers should the picker offer on phones?"
+                                .into(),
                             options: vec![
-                                "Claude Code".into(),
-                                "Codex".into(),
-                                "OpenCode".into(),
+                                "Anthropic".into(),
+                                "OpenAI".into(),
+                                "Google".into(),
                                 "Grok".into(),
                             ],
                             prefill: None,
@@ -419,14 +415,14 @@ fn tabs(host: &str, now: i64) -> Vec<SessionMessageEntry> {
                 ),
                 tool(
                     "k2",
-                    exec("cargo test -p zeron-ui tool_group"),
+                    exec("cargo test -p paku-ui tool_group"),
                     true,
                     Some("error[E0425]: cannot find value `danger_muted` in this scope"),
                 ),
                 edit("k3", "crates/ui/src/shell/transcript.rs", 6, 9),
                 tool(
                     "k4",
-                    exec("cargo test -p zeron-ui tool_group"),
+                    exec("cargo test -p paku-ui tool_group"),
                     false,
                     Some("test result: ok. 9 passed"),
                 ),
@@ -511,7 +507,7 @@ override func layoutSubviews() {
                 ),
                 tool(
                     "k1",
-                    exec("xcodebuild test -only-testing:ZeronTests/TranscriptScrollMatrixTests"),
+                    exec("xcodebuild test -only-testing:PakuTests/TranscriptScrollMatrixTests"),
                     false,
                     Some("Executed 36 tests, with 0 failures"),
                 ),
@@ -777,7 +773,7 @@ pub(crate) fn reply(prompt: &str, long: bool) -> Vec<Step> {
             run_ms: 350,
         },
         Step::Tool {
-            call: exec("cargo test -p zeron-client transcript"),
+            call: exec("cargo test -p paku-client transcript"),
             output: Some("test result: ok. 12 passed; 0 failed".into()),
             is_error: false,
             run_ms: 900,

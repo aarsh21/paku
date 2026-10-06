@@ -1,8 +1,8 @@
 //! Explicit, user-requested CLI installation. Catalog probes never call this module's executor.
 use std::{path::PathBuf, time::Duration};
 
+use paku_proto::HarnessId;
 use tokio::io::{AsyncRead, AsyncReadExt};
-use zeron_proto::HarnessId;
 
 use crate::{
     CancellationToken, Harness, HarnessError, StderrTail,
@@ -31,115 +31,45 @@ impl Platform {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Method {
-    Archive,
     Shell(&'static str, &'static str),
     Npm(&'static str, bool),
-    PowerShell(&'static str),
-    Brew,
 }
 
-// Commands verified against these vendor pages with curl -fsSL on 2026-09-21.
-// https://code.claude.com/docs/en/setup
-// https://github.com/openai/codex/blob/main/README.md
-// https://cursor.com/docs/cli/installation
-// https://opencode.ai/docs/
-// https://pi.dev/docs/latest
-// https://docs.x.ai/developers/release-notes and https://docs.x.ai/build/enterprise
-// https://hermes-agent.nousresearch.com/docs/getting-started/installation
-// https://cli.devin.ai/
+// Pi's documented installation methods: https://pi.dev/docs/latest
 fn methods(id: HarnessId, platform: Platform) -> Vec<Method> {
     use HarnessId::*;
     use Method::*;
     let windows = platform == Platform::Windows;
     match id {
         Mock => vec![],
-        Antigravity => vec![Archive],
-        ClaudeCode if windows => vec![PowerShell("irm https://claude.ai/install.ps1 | iex")],
-        ClaudeCode => vec![Shell(
-            "curl -fsSL https://claude.ai/install.sh | bash",
-            "bash",
-        )],
-        Codex if windows => vec![
-            PowerShell("irm https://chatgpt.com/codex/install.ps1 | iex"),
-            Npm("@openai/codex", false),
-        ],
-        Codex => vec![
-            Shell("curl -fsSL https://chatgpt.com/codex/install.sh | sh", "sh"),
-            Npm("@openai/codex", false),
-        ],
-        Cursor if windows => vec![PowerShell(
-            "irm 'https://cursor.com/install?win32=true' | iex",
-        )],
-        Cursor => vec![Shell("curl https://cursor.com/install -fsS | bash", "bash")],
-        Opencode if windows => vec![Npm("@opencode/cli", false)],
-        Opencode => vec![
-            Shell("curl -fsSL https://opencode.ai/install | bash", "bash"),
-            Npm("@opencode/cli", false),
-        ],
         Pi if windows => vec![Npm("@earendil-works/pi-coding-agent", true)],
         Pi => vec![
             Shell("curl -fsSL https://pi.dev/install.sh | sh", "sh"),
             Npm("@earendil-works/pi-coding-agent", true),
         ],
-        Grok if windows => vec![Npm("@xai-official/grok", false)],
-        Grok => vec![
-            Shell("curl -fsSL https://x.ai/cli/install.sh | bash", "bash"),
-            Npm("@xai-official/grok", false),
-        ],
-        Hermes if windows => vec![PowerShell(
-            "irm https://hermes-agent.nousresearch.com/install.ps1 | iex",
-        )],
-        Hermes => vec![Shell(
-            "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
-            "bash",
-        )],
-        Devin if windows => vec![PowerShell(
-            "irm https://static.devin.ai/cli/setup.ps1 | iex",
-        )],
-        Devin if platform == Platform::Mac => vec![
-            Brew,
-            Shell("curl -fsSL https://cli.devin.ai/install.sh | bash", "bash"),
-        ],
-        Devin => vec![Shell(
-            "curl -fsSL https://cli.devin.ai/install.sh | bash",
-            "bash",
-        )],
     }
 }
 
 fn resolve(name: &str) -> Option<PathBuf> {
     if name == "npm" {
-        crate::adapter_install::find_npm()
+        crate::npm::find_npm()
     } else {
         crate::executable::find_on_paths(name, vec![])
     }
 }
 
-fn available(
-    method: Method,
-    platform: Platform,
-    has: &impl Fn(&str) -> bool,
-    archive: bool,
-) -> bool {
+fn available(method: Method, platform: Platform, has: &impl Fn(&str) -> bool) -> bool {
     match method {
-        Method::Archive => archive,
         Method::Shell(_, shell) => has("sh") && has("curl") && has(shell),
         Method::Npm(..) => has("npm") && (platform == Platform::Windows || has("sh")),
-        Method::PowerShell(_) => has("powershell"),
-        Method::Brew => has("brew") && has("sh"),
     }
 }
 
 fn selected(id: HarnessId) -> Option<Method> {
     let platform = Platform::current();
-    methods(id, platform).into_iter().find(|method| {
-        available(
-            *method,
-            platform,
-            &|name| resolve(name).is_some(),
-            crate::acp::can_install(id),
-        )
-    })
+    methods(id, platform)
+        .into_iter()
+        .find(|method| available(*method, platform, &|name| resolve(name).is_some()))
 }
 
 pub fn can_install(id: HarnessId) -> bool {
@@ -150,30 +80,15 @@ pub fn can_install(id: HarnessId) -> bool {
 pub fn manual_command(id: HarnessId) -> Option<&'static str> {
     use HarnessId::*;
     Some(match id {
-        ClaudeCode => "curl -fsSL https://claude.ai/install.sh | bash",
-        Codex => "npm install -g @openai/codex",
-        Cursor => "curl https://cursor.com/install -fsS | bash",
-        Opencode => "npm install -g @opencode/cli",
         Pi => "npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
-        Grok => "npm install -g @xai-official/grok",
-        Hermes => "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
-        Devin => "curl -fsSL https://cli.devin.ai/install.sh | bash",
-        Antigravity | Mock => return None,
+        Mock => return None,
     })
 }
 
 fn cli_and_dir(id: HarnessId) -> (&'static str, &'static str) {
     use HarnessId::*;
     match id {
-        ClaudeCode => ("claude", "~/.local/bin"),
-        Codex => ("codex", "~/.local/bin or the npm global bin"),
-        Cursor => ("cursor-agent", "~/.local/bin or ~/.cursor/bin"),
-        Opencode => ("opencode", "~/.opencode/bin or the npm global bin"),
         Pi => ("pi", "the npm global bin"),
-        Grok => ("grok", "~/.grok/bin or the npm global bin"),
-        Hermes => ("hermes", "~/.local/bin or ~/.hermes/bin"),
-        Devin => ("devin", "~/.local/bin"),
-        Antigravity => ("agy_acp_server", "~/.zeron/adapters"),
         Mock => ("mock", "PATH"),
     }
 }
@@ -181,26 +96,14 @@ fn cli_and_dir(id: HarnessId) -> (&'static str, &'static str) {
 pub fn installed(id: HarnessId) -> bool {
     use HarnessId::*;
     match id {
-        ClaudeCode => crate::ClaudeHarness::new().installed(),
-        Codex => crate::CodexHarness::new().installed(),
-        Cursor => crate::CursorHarness::new().installed(),
-        Opencode => crate::OpencodeHarness::new().installed(),
         Pi => crate::PiHarness::new().installed(),
-        Grok => crate::AcpHarness::grok().installed(),
-        Hermes => crate::AcpHarness::hermes().installed(),
-        Devin => crate::AcpHarness::devin().installed(),
-        Antigravity => crate::AcpHarness::antigravity().installed(),
         Mock => false,
     }
 }
 
 fn invalidate_versions(id: HarnessId) {
     let (cli, _) = cli_and_dir(id);
-    if id == HarnessId::Cursor {
-        crate::executable::invalidate_versions(&[cli, "agent"]);
-    } else {
-        crate::executable::invalidate_versions(&[cli]);
-    }
+    crate::executable::invalidate_versions(&[cli]);
 }
 
 fn post_install(id: HarnessId) -> Result<(), HarnessError> {
@@ -214,9 +117,9 @@ fn post_install(id: HarnessId) -> Result<(), HarnessError> {
 }
 
 fn configure(command: &mut Command) {
-    crate::acp::child::configure(command);
+    crate::process::owned::configure(command);
     for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("ZERON_") {
+        if key.to_string_lossy().starts_with("PAKU_") {
             command.env_remove(key);
         }
     }
@@ -228,9 +131,13 @@ fn configure(command: &mut Command) {
         paths.extend(std::env::split_paths(path));
     }
     // npm can be found in a managed toolchain even when shell startup was disabled.
-    if let Some(npm) =
-        crate::adapter_install::find_npm().and_then(|p| p.parent().map(PathBuf::from))
-    {
+    if let Some(npm) = crate::npm::find_npm().and_then(|p| {
+        if cfg!(windows) {
+            crate::npm::node_for_npm(&p).and_then(|node| node.parent().map(PathBuf::from))
+        } else {
+            p.parent().map(PathBuf::from)
+        }
+    }) {
         paths.push(npm);
     }
     if let Ok(path) = std::env::join_paths(paths) {
@@ -249,21 +156,11 @@ fn configure(command: &mut Command) {
 fn command(method: Method) -> Result<Command, HarnessError> {
     let missing = || HarnessError::Install("installer prerequisite is no longer available".into());
     let mut command = match method {
-        Method::PowerShell(script) => {
-            let mut cmd = Command::new(resolve("powershell").ok_or_else(missing)?);
-            cmd.args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                script,
-            ]);
-            cmd
-        }
         Method::Npm(package, ignore_scripts) if cfg!(windows) => {
-            let mut cmd = Command::new(resolve("npm").ok_or_else(missing)?);
-            cmd.args(["install", "-g"]);
+            let npm = resolve("npm").ok_or_else(missing)?;
+            let node = crate::npm::node_for_npm(&npm).ok_or_else(missing)?;
+            let mut cmd = Command::new(node);
+            cmd.arg(npm).args(["install", "-g"]);
             if ignore_scripts {
                 cmd.arg("--ignore-scripts");
             }
@@ -279,8 +176,6 @@ fn command(method: Method) -> Result<Command, HarnessError> {
                 ""
             }
         ))?,
-        Method::Brew => shell_command("brew install --cask devin-cli")?,
-        Method::Archive => unreachable!("archives have a separate executor"),
     };
     configure(&mut command);
     Ok(command)
@@ -300,15 +195,7 @@ pub async fn install_harness(id: HarnessId, cancel: CancellationToken) -> Result
             "No supported installer or required tools available on this device".into(),
         )
     })?;
-    let result = if method == Method::Archive {
-        tokio::select! {
-            biased;
-            _ = cancel.cancelled() => Err(HarnessError::Install("installation cancelled".into())),
-            result = tokio::time::timeout(DEADLINE, crate::acp::install_harness(id)) => result.unwrap_or_else(|_| Err(HarnessError::Install("installation timed out after 15 minutes".into()))),
-        }
-    } else {
-        run(command(method)?, cancel, DEADLINE).await
-    };
+    let result = run(command(method)?, cancel, DEADLINE).await;
     invalidate_versions(id);
     result?;
     post_install(id)
@@ -361,7 +248,7 @@ async fn run(
     if cancel.is_cancelled() {
         return Err(HarnessError::Install("installation cancelled".into()));
     }
-    let mut child = crate::acp::child::Child::new(
+    let mut child = crate::process::owned::Child::new(
         command
             .spawn()
             .map_err(|e| HarnessError::Install(e.to_string()))?,
@@ -391,18 +278,7 @@ async fn run(
 mod tests {
     use super::*;
 
-    const IDS: [HarnessId; 10] = [
-        HarnessId::ClaudeCode,
-        HarnessId::Codex,
-        HarnessId::Cursor,
-        HarnessId::Opencode,
-        HarnessId::Pi,
-        HarnessId::Grok,
-        HarnessId::Hermes,
-        HarnessId::Devin,
-        HarnessId::Antigravity,
-        HarnessId::Mock,
-    ];
+    const IDS: [HarnessId; 2] = [HarnessId::Pi, HarnessId::Mock];
 
     #[test]
     fn platform_and_prerequisite_matrix() {
@@ -411,25 +287,22 @@ mod tests {
                 let list = methods(id, platform);
                 assert_eq!(list.is_empty(), id == HarnessId::Mock);
                 for method in list {
-                    assert!(available(method, platform, &|_| true, true));
-                    assert!(!available(method, platform, &|_| false, false));
+                    assert!(available(method, platform, &|_| true));
+                    assert!(!available(method, platform, &|_| false));
                     match method {
                         Method::Shell(_, shell) => {
                             assert_ne!(platform, Platform::Windows);
                             for missing in ["sh", "curl", shell] {
-                                assert!(!available(method, platform, &|p| p != missing, true));
+                                assert!(!available(method, platform, &|p| p != missing));
                             }
                         }
-                        Method::PowerShell(_) => assert_eq!(platform, Platform::Windows),
-                        Method::Brew => assert_eq!(platform, Platform::Mac),
                         _ => {}
                     }
                 }
             }
         }
-        assert_eq!(methods(HarnessId::Devin, Platform::Mac)[0], Method::Brew);
         assert!(matches!(
-            methods(HarnessId::Codex, Platform::Unix)[0],
+            methods(HarnessId::Pi, Platform::Unix)[0],
             Method::Shell(_, "sh")
         ));
         assert!(matches!(
@@ -463,7 +336,7 @@ mod tests {
     #[tokio::test]
     async fn installer_success_failure_timeout_and_pre_cancel() {
         run(
-            fixture("test \"$CI\" = 1 && test -z \"$CLAUDECODE\" && test ! -t 0"),
+            fixture("test \"$CI\" = 1 && test ! -t 0"),
             CancellationToken::new(),
             Duration::from_secs(2),
         )
@@ -541,10 +414,7 @@ mod tests {
     #[test]
     fn manual_commands_and_missing_binary_guidance() {
         for id in IDS {
-            assert_eq!(
-                manual_command(id).is_some(),
-                !matches!(id, HarnessId::Mock | HarnessId::Antigravity)
-            );
+            assert_eq!(manual_command(id).is_some(), id == HarnessId::Pi);
             let (cli, dir) = cli_and_dir(id);
             assert!(!cli.is_empty() && !dir.is_empty());
         }

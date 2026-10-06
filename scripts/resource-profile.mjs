@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Linux/macOS end-to-end resource profile. Node >=22; no npm dependencies.
-// Usage: node scripts/resource-profile.mjs BINARY OUTPUT_DIR [claude-code|mock]
+// Usage: node scripts/resource-profile.mjs BINARY OUTPUT_DIR [pi|mock]
 // DISPLAY must name a working X server; unset WAYLAND_DISPLAY for Xvfb.
-// Uses isolated local data and a real harness (Haiku by default). This costs
-// one API turn. RSS/CPU for the CLI child are reported separately from Zeron.
+// Uses isolated local data and Pi's configured default model (override with
+// PAKU_PROFILE_MODEL=provider/model). A real Pi run costs one API turn. RSS/CPU for the CLI child are reported separately from Paku.
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, openSync, readFileSync, writeFileSync, existsSync, readdirSync, copyFileSync, createReadStream } from 'node:fs';
 import { resolve } from 'node:path';
@@ -12,12 +12,17 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { createServer } from 'node:net';
 import { fileURLToPath } from 'node:url';
 
+if (Object.keys(process.env).some(key => /^(PAKU|ZERON)_REPLAY_/.test(key))) {
+  throw Error('Replay journals are not supported by Paku. Refusing to run a paid Pi turn mislabeled as replay.');
+}
 const macOS = process.platform === 'darwin';
 const nativeWindowSource = fileURLToPath(new URL('./macos-profile-window.swift', import.meta.url));
 if (macOS) execFileSync('swift', [nativeWindowSource]);
 
-const [binaryArg, outputArg, harness = 'claude-code'] = process.argv.slice(2);
-if (!binaryArg || !outputArg) throw Error('Usage: resource-profile.mjs BINARY OUTPUT_DIR [claude-code|mock]');
+const [binaryArg, outputArg, harness = 'pi'] = process.argv.slice(2);
+if (!binaryArg || !outputArg) throw Error('Usage: resource-profile.mjs BINARY OUTPUT_DIR [pi|mock]');
+if (!['pi', 'mock'].includes(harness)) throw Error('Paku supports Pi only (mock is a test double)');
+const model = harness === 'mock' ? 'mock-1' : (process.env.PAKU_PROFILE_MODEL || null);
 const binary = resolve(binaryArg), output = resolve(outputArg);
 if (existsSync(output)) throw Error('Use a new output directory for an isolated run');
 mkdirSync(output, { recursive: true });
@@ -28,7 +33,7 @@ if (macOS) execFileSync('xcrun', ['clang', '-O2', '-Wall', '-Wextra',
 if (macOS) execFileSync('swiftc', ['-O', nativeWindowSource, '-o', nativeWindow]);
 // Shared Cargo targets can be replaced by another worktree mid-profile.
 // Both processes must execute the exact same immutable build throughout.
-const profiledBinary = `${output}/zeron-profiled`;
+const profiledBinary = `${output}/paku-profiled`;
 copyFileSync(binary, profiledBinary);
 const binaryHash = createHash('sha256');
 for await (const chunk of createReadStream(profiledBinary)) binaryHash.update(chunk);
@@ -38,20 +43,18 @@ mkdirSync(cwd);
 execFileSync('git', ['init', '-q', cwd]);
 mkdirSync(`${output}/ui`);
 writeFileSync(`${output}/ui/composer-defaults.json`, JSON.stringify({
-  harness, modelByHarness: { [harness]: {
-    id: harness === 'mock' ? 'fable-5' : 'claude-haiku-4-5', label: harness === 'mock' ? 'Fable 5' : 'Haiku',
-  } },
-  modelLabels: { 'claude-haiku-4-5': 'Haiku' }, reasoning: null,
+  harness, modelByHarness: model ? { [harness]: { id: model, label: model } } : {},
+  modelLabels: model ? { [model]: model } : {}, reasoning: null,
 }));
 const server = createServer();
 await new Promise(r => server.listen(0, '127.0.0.1', r));
 const port = server.address().port;
 await new Promise(r => server.close(r));
-const env = { ...process.env, ZERON_IPC_PORT: String(port), ZERON_DATA_DIR: `${output}/engine`,
-  ZERON_HARNESS: harness, ZERON_FRAME_STATS: process.env.ZERON_FRAME_STATS ?? '1', RUST_LOG: 'warn',
-  ZERON_MOCK_CHARS: '24', ZERON_MOCK_DELAY_MS: '20' };
-delete env.ZERON_EDGE_TOKEN;
-delete env.ZERON_ORG_ID;
+const env = { ...process.env, PAKU_IPC_PORT: String(port), PAKU_DATA_DIR: `${output}/engine`,
+  PAKU_HARNESS: harness, PAKU_EDGE_URL: '', PAKU_FRAME_STATS: process.env.PAKU_FRAME_STATS ?? '1', RUST_LOG: 'warn',
+  PAKU_MOCK_CHARS: '24', PAKU_MOCK_DELAY_MS: '20' };
+delete env.PAKU_EDGE_TOKEN;
+delete env.PAKU_ORG_ID;
 const processes = [];
 function start(args, name, extra = {}) {
   const log = openSync(`${output}/${name}.log`, 'w');
@@ -71,7 +74,7 @@ function stat(pid) {
     const main = readFileSync(`/proc/${pid}/task/${pid}/stat`, 'utf8').split(') ')[1].split(' ');
     const status = readFileSync(`/proc/${pid}/status`, 'utf8');
     // Optional proportional memory avoids counting shared mappings twice.
-    const pss = process.env.ZERON_PROFILE_PSS === '1'
+    const pss = process.env.PAKU_PROFILE_PSS === '1'
       ? { pssMiB: Number(readFileSync(`/proc/${pid}/smaps_rollup`, 'utf8').match(/^Pss:\s+(\d+)/m)?.[1] ?? 0) / 1024 }
       : {};
     return { pid, ...pss, cpuSeconds: (Number(stat[11]) + Number(stat[12])) / hz,
@@ -147,9 +150,9 @@ try {
   const spaceId = randomUUID(), chatId = randomUUID();
   await call('Mutate', { op: 'createSpace', spaceId, deviceId, path: cwd });
   await call('Mutate', { op: 'createChat', chatId, spaceId,
-    config: { harness, model: harness === 'mock' ? 'fable-5' : 'claude-haiku-4-5', reasoning: null, sandbox: 'workspace-write' } });
+    config: { harness, model, reasoning: null, sandbox: 'workspace-write' } });
   await call('Mutate', { op: 'renameChat', chatId, title: 'Resource profile' });
-  const backgroundChats = Number(process.env.ZERON_PROFILE_BACKGROUND_CHATS ?? 0);
+  const backgroundChats = Number(process.env.PAKU_PROFILE_BACKGROUND_CHATS ?? 0);
   if (!Number.isSafeInteger(backgroundChats) || backgroundChats < 0) throw Error('Invalid background chat count');
   for (let index = 0; index < backgroundChats; index++) {
     const backgroundId = randomUUID();
@@ -163,7 +166,7 @@ try {
   } });
   ws.send(JSON.stringify({ id, method: 'WatchDocMessages', params: { chatId } }));
   const locator = createHash('sha256').update(`Local\0device:${deviceId}`).digest('hex').slice(0, 16);
-  const ui = start([`zeron://open/chat/${chatId}?workspace=${locator}`], 'ui', { ZERON_DATA_DIR: `${output}/ui` });
+  const ui = start([`paku://open/chat/${chatId}?workspace=${locator}`], 'ui', { PAKU_DATA_DIR: `${output}/ui` });
   writeFileSync(`${output}/pids.json`, JSON.stringify({engine: engine.pid, ui: ui.pid}));
   // Native windows activate themselves. Let the initial layout/splash settle.
   if (macOS) {
@@ -175,8 +178,8 @@ try {
   // window can consume no rendering CPU for the entire workload).
   if (!macOS && process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
     await sleep(2000);
-    const windows = execFileSync('xdotool', ['search', '--class', '^zeron$'], { encoding: 'utf8' }).trim().split('\n');
-    if (windows.length !== 1) throw Error('Use a dedicated X display with exactly one Zeron window');
+    const windows = execFileSync('xdotool', ['search', '--class', '^paku$'], { encoding: 'utf8' }).trim().split('\n');
+    if (windows.length !== 1) throw Error('Use a dedicated X display with exactly one Paku window');
     execFileSync('xdotool', ['windowraise', windows[0], 'windowsize', windows[0], '1280', '800', 'windowfocus', windows[0]]);
   }
   sampler = setInterval(() => {
@@ -191,16 +194,16 @@ try {
       harness: descendants(engine.pid).map(stat).filter(Boolean) });
   }, 500);
   phase = 'idle';
-  await sleep(Number(process.env.ZERON_PROFILE_PRE_IDLE_MS ?? 10000));
+  await sleep(Number(process.env.PAKU_PROFILE_PRE_IDLE_MS ?? 10000));
   if (ui.exitCode != null) throw Error('UI exited; inspect ui.log');
   phase = 'stream';
-  const prompt = process.env.ZERON_PROFILE_PROMPT ??
+  const prompt = process.env.PAKU_PROFILE_PROMPT ??
     'Do not use tools. Write a detailed tutorial of Rust ownership in exactly 80 numbered sections. Each section should have a heading, a paragraph of at least 60 words and a short Rust code example. Continue through all 80 sections without asking questions.';
-  const turns = Number(process.env.ZERON_PROFILE_TURNS ?? 1);
-  if (!Number.isSafeInteger(turns) || turns < 1) throw Error('ZERON_PROFILE_TURNS must be a positive integer');
+  const turns = Number(process.env.PAKU_PROFILE_TURNS ?? 1);
+  if (!Number.isSafeInteger(turns) || turns < 1) throw Error('PAKU_PROFILE_TURNS must be a positive integer');
   for (let turn = 0; turn < turns; turn++) {
     const priorAssistants = new Set(transcript.filter(e => e.role === 'assistant').map(e => e.id));
-    if (process.env.ZERON_PROFILE_SUBMIT_UI === '1') {
+    if (process.env.PAKU_PROFILE_SUBMIT_UI === '1') {
       // Functional mode exercises the composer's own-turn scroll anchoring.
       // Use a dedicated display; the driver focused the app's composer above.
       if (macOS) {
@@ -213,11 +216,11 @@ try {
       }
     } else {
       await call('QueueCommand', { chatId, command: { kind: 'run', messageId: randomUUID(), request: {
-        prompt, model: harness === 'mock' ? null : 'haiku', reasoning: null, modelOptions: {}, cwd,
+        prompt, model: harness === 'mock' ? null : model, reasoning: null, modelOptions: {}, cwd,
         sandbox: 'workspace-write', autoApprove: true, resume: null,
       } } });
     }
-    const timeoutMs = Number(process.env.ZERON_PROFILE_TIMEOUT_MS ?? 240000);
+    const timeoutMs = Number(process.env.PAKU_PROFILE_TIMEOUT_MS ?? 240000);
     const deadline = Date.now() + timeoutMs;
     let complete = false;
     while (Date.now() < deadline) {
@@ -234,7 +237,7 @@ try {
       if (ui.exitCode != null || engine.exitCode != null) throw Error('Profiled process exited');
     }
     if (!complete) throw Error(`Turn did not complete within ${timeoutMs / 1000} seconds`);
-    if (process.env.ZERON_PROFILE_SUBMIT_UI === '1') {
+    if (process.env.PAKU_PROFILE_SUBMIT_UI === '1') {
       const sent = transcript.filter(e => e.role === 'user').at(-1)?.parts
         .filter(p => p.kind === 'text').map(p => p.text).join('');
       if (sent !== prompt) throw Error('Composer input did not submit the exact requested prompt');
@@ -242,15 +245,15 @@ try {
     if (turn + 1 < turns) await sleep(500);
   }
   phase = 'settled';
-  await sleep(Number(process.env.ZERON_PROFILE_IDLE_MS ?? 15000));
+  await sleep(Number(process.env.PAKU_PROFILE_IDLE_MS ?? 15000));
   if (streamError) throw streamError;
   if (macOS) execFileSync(nativeWindow);
   const reply = transcript.filter(e => e.role === 'assistant').flatMap(e => e.parts)
     .filter(p => p.kind === 'text' || p.kind === 'reasoning').map(p => p.text).join('\n\n');
-  const summary = { binary, binarySha256, harness, mode: process.env.ZERON_REPLAY_JOURNAL ? 'replay' : 'live',
+  const summary = { binary, binarySha256, harness, mode: harness === 'mock' ? 'mock' : 'live',
     platform: process.platform, arch: process.arch,
-    renderThreads: process.env.LP_NUM_THREADS ?? 'default', frameStats: env.ZERON_FRAME_STATS,
-    submission: process.env.ZERON_PROFILE_SUBMIT_UI === '1' ? 'composer' : 'rpc', turns, backgroundChats, prompt,
+    renderThreads: process.env.LP_NUM_THREADS ?? 'default', frameStats: env.PAKU_FRAME_STATS,
+    submission: process.env.PAKU_PROFILE_SUBMIT_UI === '1' ? 'composer' : 'rpc', turns, backgroundChats, prompt,
     replySha256: createHash('sha256').update(reply).digest('hex'), replyBytes: Buffer.byteLength(reply),
     transcriptBytes: Buffer.byteLength(JSON.stringify(transcript)), frames: frames.length, phases: {} };
   for (const p of ['idle', 'stream', 'settled']) {
@@ -289,7 +292,7 @@ try {
   // Optional machine-specific regression budgets. Do not bake software-GPU
   // numbers into a universal desktop threshold.
   for (const name of ['engine', 'ui']) {
-    const budget = process.env[`ZERON_MAX_${name.toUpperCase()}_RSS_MIB`];
+    const budget = process.env[`PAKU_MAX_${name.toUpperCase()}_RSS_MIB`];
     if (budget == null) continue;
     const limit = Number(budget);
     if (!Number.isFinite(limit) || limit <= 0) throw Error(`Invalid ${name} RSS budget`);
@@ -299,7 +302,7 @@ try {
   // Keep a verified conversation open for manual interaction checks without
   // counting those interactions in the measured phases.
   clearInterval(sampler);
-  if (process.env.ZERON_PROFILE_HOLD_MS) await sleep(Number(process.env.ZERON_PROFILE_HOLD_MS));
+  if (process.env.PAKU_PROFILE_HOLD_MS) await sleep(Number(process.env.PAKU_PROFILE_HOLD_MS));
 } finally {
   clearInterval(sampler);
   writeFileSync(`${output}/samples.json`, JSON.stringify(samples));

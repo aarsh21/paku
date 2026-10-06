@@ -10,8 +10,8 @@ use gpui::{
     Context, Entity, IntoElement, Render, SharedString, Subscription, Task, Window, div,
     prelude::*, px,
 };
-use zeron_proto::{AgentAccount, AgentAccountsSnapshot, HarnessId};
-use zeron_rpc::methods;
+use paku_proto::{AgentAccount, AgentAccountsSnapshot, HarnessId};
+use paku_rpc::methods;
 
 use crate::popover;
 use crate::settings::accounts::{
@@ -41,10 +41,18 @@ pub fn active_account(
     snapshot: &AgentAccountsSnapshot,
     harness: HarnessId,
 ) -> Option<&AgentAccount> {
+    if harness != HarnessId::Pi {
+        return None;
+    }
     snapshot
         .accounts
         .iter()
-        .find(|account| account.harness == harness && account.active)
+        .filter(|account| account.harness == harness && account.active)
+        // Pi may have a live login for each model provider. Show the binding
+        // quota rather than whichever provider happens to be listed first.
+        .filter_map(|account| used_fraction(account).map(|used| (account, used)))
+        .max_by(|(_, left), (_, right)| left.total_cmp(right))
+        .map(|(account, _)| account)
 }
 
 /// Loads (and switches) the accounts of the composer's target device.
@@ -460,7 +468,7 @@ impl Render for AccountUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zeron_proto::AgentUsageWindow;
+    use paku_proto::AgentUsageWindow;
 
     fn account(harness: HarnessId, active: bool, used: &[f32]) -> AgentAccount {
         serde_json::from_value(serde_json::json!({
@@ -484,13 +492,13 @@ mod tests {
 
     #[test]
     fn ring_shows_the_most_used_window() {
-        assert_eq!(used_fraction(&account(HarnessId::Codex, true, &[])), None);
+        assert_eq!(used_fraction(&account(HarnessId::Pi, true, &[])), None);
         assert_eq!(
-            used_fraction(&account(HarnessId::Codex, true, &[0.12, 0.64])),
+            used_fraction(&account(HarnessId::Pi, true, &[0.12, 0.64])),
             Some(0.64)
         );
         assert_eq!(
-            used_fraction(&account(HarnessId::Codex, true, &[1.4])),
+            used_fraction(&account(HarnessId::Pi, true, &[1.4])),
             Some(1.0)
         );
     }
@@ -499,16 +507,34 @@ mod tests {
     fn active_account_is_scoped_to_the_harness() {
         let snapshot = AgentAccountsSnapshot {
             accounts: vec![
-                account(HarnessId::ClaudeCode, true, &[0.3]),
-                account(HarnessId::Codex, false, &[0.1]),
-                account(HarnessId::Codex, true, &[0.2]),
+                account(HarnessId::Mock, true, &[0.9]),
+                account(HarnessId::Pi, false, &[0.8]),
+                account(HarnessId::Pi, true, &[0.2]),
             ],
             warnings: Vec::new(),
         };
         assert_eq!(
-            active_account(&snapshot, HarnessId::Codex).map(|a| a.id.as_str()),
-            Some("Codex-true")
+            active_account(&snapshot, HarnessId::Pi).map(|a| a.id.as_str()),
+            Some("Pi-true")
         );
-        assert!(active_account(&snapshot, HarnessId::Cursor).is_none());
+        assert!(active_account(&snapshot, HarnessId::Mock).is_none());
+    }
+
+    #[test]
+    fn pi_ring_uses_the_binding_provider_with_usage() {
+        let mut snapshot = AgentAccountsSnapshot {
+            accounts: vec![
+                account(HarnessId::Pi, true, &[]),
+                account(HarnessId::Pi, true, &[0.3]),
+                account(HarnessId::Pi, true, &[0.7]),
+                account(HarnessId::Pi, false, &[0.95]),
+            ],
+            warnings: Vec::new(),
+        };
+        snapshot.accounts[1].provider = Some("anthropic".into());
+        snapshot.accounts[2].provider = Some("openai-codex".into());
+        let active = active_account(&snapshot, HarnessId::Pi).unwrap();
+        assert_eq!(active.provider.as_deref(), Some("openai-codex"));
+        assert_eq!(used_fraction(active), Some(0.7));
     }
 }

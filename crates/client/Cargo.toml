@@ -1,5 +1,5 @@
 [package]
-name = "zeron-client"
+name = "paku-client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,10 +12,10 @@ publish.workspace = true
 # frontend (iOS, Android, tests, CLIs).
 
 [dependencies]
-zeron-proto.workspace = true
-zeron-doc.workspace = true
-zeron-sync.workspace = true
-zeron-rpc.workspace = true
+paku-proto.workspace = true
+paku-doc.workspace = true
+paku-sync.workspace = true
+paku-rpc.workspace = true
 loro.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
@@ -31,7 +31,7 @@ async-trait.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-zeron-sync = { workspace = true, features = ["mock-server"] }
+paku-sync = { workspace = true, features = ["mock-server"] }
 tokio-tungstenite.workspace = true
 async-trait.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

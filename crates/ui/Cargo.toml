@@ -1,5 +1,5 @@
 [package]
-name = "zeron-ui"
+name = "paku-ui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -47,17 +47,17 @@ name = "compact-picker-fixture"
 required-features = ["compact-picker-fixture"]
 
 [dependencies]
-zeron-voice = { path = "../voice" }
+paku-voice = { path = "../voice" }
 url = "2"
-zeron-proto.workspace = true
+paku-proto.workspace = true
 similar.workspace = true
-zeron-doc.workspace = true
-zeron-engine.workspace = true
-zeron-harness.workspace = true
-zeron-rpc.workspace = true
-zeron-update.workspace = true
-zeron-syntax.workspace = true
-zeron-theme.workspace = true
+paku-doc.workspace = true
+paku-engine.workspace = true
+paku-harness.workspace = true
+paku-rpc.workspace = true
+paku-update.workspace = true
+paku-syntax.workspace = true
+paku-theme.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 gpui_tokio.workspace = true
@@ -68,7 +68,7 @@ async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 pulldown-cmark.workspace = true
-zeron-markdown.workspace = true
+paku-markdown.workspace = true
 alacritty_terminal.workspace = true
 base64 = "0.22"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff", "ico"] }

@@ -1,5 +1,7 @@
 # Runway layout regression and performance validation — PR #261
 
+> Historical upstream **Zeron** evidence, not Paku verification. Recorded revisions, paths and hashes are preserved; reproduction commands apply only to those upstream revisions. Current Paku verification: `scripts/verify-paku.sh`.
+
 The layout fix showed no material CPU or memory regression in eight matched
 Linux replays against v0.2.41 (`489a8c2`). The tested candidate is `d8c5760`,
 including that same sidebar fix. Streaming CPU changed by −0.26% on long replies

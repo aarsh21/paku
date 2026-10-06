@@ -1,56 +1,25 @@
-# Zeron
+# Paku
 
-在本地管理你的编码 agent（Claude Code、Codex、Cursor、Devin、Grok、Hermes、Pi、Antigravity），也可以打开多设备同步。
+Paku 是面向 [Pi](https://github.com/badlogic/pi-mono) 的本地优先原生桌面及无界面应用，也是 [Zeron](https://github.com/zeronsh/zeron) 的 **Pi-only 分支**。原应用、架构与实现归功于 Zeron 贡献者。Paku 是独立项目，并非 Zeron 或 Pi 官方产品。
 
-*[English](README.md) | 简体中文 | [한국어](README.ko.md) | [日本語](README.ja.md)*
+[English](README.md) | 简体中文 | [한국어](README.ko.md) | [日本語](README.ja.md)
 
-![Zeron 桌面应用](docs/media/readme/app-screenshot.jpg)
+## 从源码运行
 
-## 桌面应用
+请安装 `rust-toolchain.toml` 指定的 Rust 工具链、[平台构建依赖](dist/README.md)，以及已完成认证的 Pi CLI（0.85.1 或更新）。
 
-从 [GitHub Releases](https://github.com/zeronsh/zeron/releases/latest) 下载对应平台的最新版本：
-
-- **macOS** — `zeron-<version>-macos-arm64.dmg`
-- **Windows** — `zeron-<version>-windows-x86_64-setup.exe`
-- **Linux** — `zeron-<version>-linux-<arch>.tar.gz`，解压后运行里面的 `install.sh`
-
-不用账号，也不用联网，会话就存在这台设备上。应用会自动更新。
-
-## 无界面运行（CLI）
-
-适用于服务器等没有显示器的机器，比如在你合上笔记本之后继续跑 agent 的 VPS。仅支持 Linux：
-
-```bash
-curl -fsSL https://zeron.sh/install.sh | sh
-zeron status
+```sh
+git clone https://github.com/aarsh21/paku.git
+cd paku
+cargo run -p paku
+# 无界面模式
+cargo run -p paku -- headless
 ```
 
-安装脚本会把引擎作为后台服务拉起来，重启之后也会自己回来。
+Paku 直接运行 `pi --mode rpc`。可用 `PI_EXECUTABLE` 指定可执行文件；模型与凭据由 Pi 管理。详见 [Pi 集成](docs/pi.md)。
 
-```bash
-zeron status      # 查看本地/同步模式和引擎状态
-zeron update      # 更新到最新版本
-zeron daemon start|stop|restart|status
-```
+本地会话无需 Paku 账户；记录与附件保存在本机。Pi 仍会连接您配置的模型提供商。此分支不提供托管的 Paku 服务。可选同步需要您自行配置 Cloudflare 资源与认证，参见[自托管说明](docs/self-hosting.md)。同一账户的设备是拥有工作区读写权限的可信节点。
 
-## 多设备同步（可选）
+目前请从源码构建。[Paku Releases](https://github.com/aarsh21/paku/releases) 仅供查询将来发布的构建，不保证已有下载、自动更新或公共安装服务。验证命令见 [English README](README.md)。
 
-登录后，可以在一台设备上起 agent，换另一台设备接着看、接着操作：
-
-```bash
-zeron daemon stop
-zeron login        # 或者 zeron logout 切回纯本地模式
-zeron daemon start
-```
-
-登录同一账号的设备可以读写彼此工作区里的文件，所以只登录你信任的设备。已有的本地会话不会被上传。
-
-## 赞助
-
-感谢 [The Context Company](https://www.thecontextcompany.com/) 对 Zeron 的赞助。你也可以[通过 GitHub 成为赞助者](https://github.com/sponsors/zeronsh)，资助 Zeron 的开发。
-
----
-
-想参与开发，或者好奇它怎么跑起来的？[Ask DeepWiki](https://deepwiki.com/zeronsh/zeron)，也可以看 [ARCHITECTURE.md](ARCHITECTURE.md)。
-
-采用 [MIT License](LICENSE)。
+[架构](ARCHITECTURE.md) · [MIT 许可证](LICENSE) · [第三方声明](THIRD_PARTY_NOTICES.md)

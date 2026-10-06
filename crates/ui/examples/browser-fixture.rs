@@ -1,17 +1,17 @@
-#[path = "browser-fixture/transcript_links.rs"]
-mod transcript_links;
 #[cfg(target_os = "linux")]
 #[path = "browser-fixture/linux.rs"]
 mod linux;
+#[path = "browser-fixture/transcript_links.rs"]
+mod transcript_links;
 // Real shell + native WebKit smoke test and screenshot fixture. Synthetic
 // chat data, isolated temp storage, loopback-only website, no engine services.
 use gpui::{AppContext, AsyncApp, Bounds, WindowBounds, WindowOptions, px, size};
+use paku_ui::*;
 use std::{
     io::{Read, Write},
     path::PathBuf,
     time::Duration,
 };
-use zeron_ui::*;
 
 async fn pause(cx: &mut AsyncApp, ms: u64) {
     cx.background_executor()
@@ -37,7 +37,7 @@ fn capture(directory: &std::path::Path, name: &str) -> anyhow::Result<()> {
     };
     #[cfg(not(target_os = "macos"))]
     let status = {
-        let capture_window = std::env::var("ZERON_BROWSER_CAPTURE_WINDOW").ok();
+        let capture_window = std::env::var("PAKU_BROWSER_CAPTURE_WINDOW").ok();
         let windows = std::process::Command::new("xdotool")
             .args([
                 "search",
@@ -126,7 +126,7 @@ fn main() -> anyhow::Result<()> {
     let output = PathBuf::from(
         std::env::args()
             .nth(1)
-            .unwrap_or_else(|| "/tmp/zeron-browser-captures".into()),
+            .unwrap_or_else(|| "/tmp/paku-browser-captures".into()),
     );
     std::fs::create_dir_all(&output)?;
     let temp = tempfile::tempdir()?;
@@ -165,7 +165,10 @@ fn main() -> anyhow::Result<()> {
     let result = failure.clone();
     gpui_platform::application().with_assets(icons::Assets).run(move |cx| {
         gpui_tokio::init(cx); gpui_base::init(cx);
-        let settings = settings::UiSettings::default();
+        let mut settings = settings::UiSettings::default();
+        if let Ok(scale) = std::env::var("PAKU_BROWSER_UI_SCALE") {
+            settings.ui_scale = paku_ui::ui_scale::normalize(scale.parse().expect("numeric fixture UI scale"));
+        }
         settings::init(settings.clone(), data.clone(), cx);
         let fonts = typography::register_fonts(cx);
         typography::init(settings.ui_font_family.clone(), settings.ui_font_size, settings.terminal_font_family.clone(), settings.terminal_font_size, settings.code_font_family.clone(), settings.code_font_size, fonts, cx);
@@ -176,29 +179,32 @@ fn main() -> anyhow::Result<()> {
         composer::init(cx, settings.composer_send_behavior); terminal::panel::init(cx); app_menus::init(cx);
         let state = cx.new(|_| {
             let mut s = state::AppState::new();
-            s.connection = zeron_proto::view::ConnectionStatus::Ready;
-            s.workspace_scope = Some(zeron_proto::WorkspaceScope::Local);
+            s.connection = paku_proto::view::ConnectionStatus::Ready;
+            s.workspace_scope = Some(paku_proto::WorkspaceScope::Local);
             s.local_device_id = Some("local".into());
             s.devices = vec![serde_json::from_value(serde_json::json!({"id":"local","name":"This device","platform":std::env::consts::OS,"lastSeenAt":null})).unwrap()];
             s.selected_chat = Some("browser-fixture".into()); s.selected_space = Some("project".into());
             s.auto_selected = true; s.chats_synced = true; s.spaces_synced = true;
             s.spaces = vec![serde_json::from_value(serde_json::json!({"id":"project","deviceId":"local","path":"/tmp/fieldnotes","createdAt":"2026-09-08T00:00:00Z"})).unwrap()];
-            s.chats = vec![serde_json::from_value(serde_json::json!({"id":"browser-fixture","deviceId":"local","spaceId":"project","title":"Build the Fieldnotes workspace","archived":false,"createdAt":"2026-09-08T00:00:00Z","config":{"harness":"claude-code","model":"claude-sonnet-4-6","reasoning":null,"sandbox":"workspace-write"}})).unwrap()];
+            s.chats = vec![serde_json::from_value(serde_json::json!({"id":"browser-fixture","deviceId":"local","spaceId":"project","title":"Build the Fieldnotes workspace","archived":false,"createdAt":"2026-09-08T00:00:00Z","config":{"harness":"pi","model":"anthropic/claude-sonnet-4-6","reasoning":null,"sandbox":"workspace-write"}})).unwrap()];
             s
         });
-        let boot = EngineBootConfig { data_dir: data, ipc_port: 0, edge_url: String::new(), edge_token: None, org_id: None, workos_client_id: None, default_harness: HarnessId::ClaudeCode };
+        let boot = EngineBootConfig { data_dir: data, ipc_port: 0, edge_url: String::new(), edge_token: None, org_id: None, workos_client_id: None, default_harness: HarnessId::Pi };
         let window = cx.open_window(WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::new(gpui::point(px(12.),px(30.)), size(px(1000.),px(680.))))),
             titlebar: Some(gpui::TitlebarOptions { title: None, appears_transparent: true, traffic_light_position: Some(gpui::point(px(14.),px(14.))) }),
             app_owns_titlebar_drag: true,
             ..Default::default()
-        }, |_, cx| cx.new(|cx| shell::Shell::new(state.clone(), boot, cx))).unwrap();
+        }, |window, cx| {
+            paku_ui::ui_scale::observe_window(window, cx).detach();
+            cx.new(|cx| shell::Shell::new(state.clone(), boot, cx))
+        }).unwrap();
         state.update(cx, |_, cx| cx.notify());
         cx.activate(true);
         cx.spawn(async move |cx| {
             let run: anyhow::Result<()> = async {
                 pause(cx, 1200).await;
-                if std::env::var_os("ZERON_TRANSCRIPT_LINK_FIXTURE_ONLY").is_some() {
+                if std::env::var_os("PAKU_TRANSCRIPT_LINK_FIXTURE_ONLY").is_some() {
                     return transcript_links::exercise(window, state.clone(), &_origin, &output, cx).await;
                 }
                 state.update(cx, |s, cx| {
@@ -206,7 +212,7 @@ fn main() -> anyhow::Result<()> {
                         {"id":"fixture-user","role":"user","parts":[{"id":"text","kind":"text","text":"Build a calm, thoughtful workspace for Fieldnotes. Let’s preview the landing page beside this conversation."}],"createdAt":1788900000000_i64,"deviceId":"local"},
                         {"id":"fixture-assistant","role":"assistant","parts":[{"id":"text","kind":"text","text":"The first layout is ready to review.\n\nIt uses warm neutrals, generous spacing, and a simple hierarchy. The workspace cards stay readable as the preview gets narrower.\n\nOpen **Browser** from the sidebar’s **+** menu to keep the page beside your work."}],"createdAt":1788900001000_i64,"deviceId":"local","status":"complete"}
                     ])).unwrap();
-                    s.receive_transcript_frame(zeron_doc::TranscriptFrame::Reset { reset: entries }, cx).unwrap();
+                    s.receive_transcript_frame(paku_doc::TranscriptFrame::Reset { reset: entries }, cx).unwrap();
                 });
                 let (first_id, first) = window.update(cx, |shell, w, cx| shell.fixture_open_browser(None, w, cx))?;
                 pause(cx, 500).await;
@@ -349,7 +355,7 @@ fn main() -> anyhow::Result<()> {
                 }
                 #[cfg(target_os = "macos")]
                 {
-                    cx.update(|cx|appearance::set_surface(zeron_theme::SurfacePreference::Frosted,cx));
+                    cx.update(|cx|appearance::set_surface(paku_theme::SurfacePreference::Frosted,cx));
                     first.read_with(cx, |b,_| b.fixture_eval("(() => {let grid=document.createElement('div'); grid.id='browser-blur-grid'; grid.style='height:140px;background:repeating-conic-gradient(#172f25 0% 25%,#f5f0df 0% 50%) 0 0/16px 16px'; document.body.style.paddingTop='0'; document.body.prepend(grid);})()"));
                     pause(cx,300).await;
                     let mut layout_video = std::process::Command::new("/usr/sbin/screencapture").args(["-v","-V","30","-C","-k","-D","1"]).arg(output.join("browser-layout.mov")).spawn()?;
@@ -442,11 +448,11 @@ fn main() -> anyhow::Result<()> {
                     pause(cx,500).await;
                     capture(&output,"browser-blur-solid-light")?;
                     let window_width=gpui::AnyWindowHandle::from(window).update(cx,|_,w,_|f32::from(w.viewport_size().width))?;
-                    cx.update(|cx|appearance::set_surface(zeron_theme::SurfacePreference::Opaque,cx));
+                    cx.update(|cx|appearance::set_surface(paku_theme::SurfacePreference::Opaque,cx));
                     pause(cx,500).await;
                     anyhow::ensure!(first.read_with(cx,|b,_|b.fixture_backdrops().is_empty()),"opaque appearance retained native blur");
                     capture(&output,"browser-menu-opaque")?;
-                    cx.update(|cx| {appearance::set_mode(appearance::AppearanceMode::Dark,cx);appearance::set_surface(zeron_theme::SurfacePreference::Frosted,cx);});
+                    cx.update(|cx| {appearance::set_mode(appearance::AppearanceMode::Dark,cx);appearance::set_surface(paku_theme::SurfacePreference::Frosted,cx);});
                     window.update(cx,|s,_,cx|s.fixture_browser_menu(false,cx))?;
                     pause(cx,500).await;
                     anyhow::ensure!(first.read_with(cx,|b,_|b.fixture_backdrops().is_empty()),"dismissed menu retained native blur");

@@ -1,5 +1,7 @@
 # Runway scrolling performance check — PR #257
 
+> Historical upstream **Zeron** evidence, not Paku verification. Recorded revisions, paths and hashes are preserved; reproduction commands apply only to those upstream revisions. Current Paku verification: `scripts/verify-paku.sh`.
+
 No material CPU or memory regression was detected against the newly optimized
 `main` (`6d642ac`, PR #255 including #256). The candidate is `ee08569`, the runway
 fix merged with that same main. Its only application difference is

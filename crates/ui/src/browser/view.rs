@@ -535,11 +535,18 @@ impl Render for BrowserSurface {
                                 (window.viewport_size().width - right_occlusion).max(mask.left());
                             mask.size.width = mask.size.width.min(right - mask.left());
                             let dragging = cx.has_active_drag();
+                            // AppKit children use native window points, while GPUI
+                            // bounds/masks are in the zoomed UI coordinate space.
+                            let zoom = window.ui_zoom();
                             window.on_present(move || {
                                 if let Some(native) = native.upgrade() {
-                                    native
-                                        .borrow_mut()
-                                        .sync(bounds, mask, dragging, resize_inset);
+                                    native.borrow_mut().sync(
+                                        bounds.map(|value| value * zoom),
+                                        mask.map(|value| value * zoom),
+                                        dragging,
+                                        resize_inset * zoom,
+                                        zoom,
+                                    );
                                 }
                             });
                         },
@@ -627,7 +634,7 @@ impl Render for BrowserSurface {
                 .and_then(|s| url::Url::parse(s).ok())
                 .is_some_and(|u| {
                     super::model::loopback(&u)
-                        && !(u.port() == Some(zeron_proto::PREVIEW_PROXY_PORT)
+                        && !(u.port() == Some(paku_proto::PREVIEW_PROXY_PORT)
                             && u.host_str()
                                 .is_some_and(|host| host.ends_with(".localhost")))
                 });

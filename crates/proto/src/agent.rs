@@ -2,28 +2,14 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum HarnessId {
-    ClaudeCode,
-    Codex,
-    Cursor,
-    /// Cognition's Devin agent, driven over ACP (`devin acp`).
-    Devin,
-    /// xAI's Grok Build agent, driven over ACP (`grok agent stdio`).
-    Grok,
-    /// Nous Research's Hermes Agent, driven over ACP (`hermes acp`).
-    Hermes,
     /// The Pi coding agent (pi.dev), driven over its native JSONL RPC protocol.
+    /// Pi's underlying model providers are not separate app harnesses.
+    #[default]
     Pi,
-    /// SST's opencode agent, driven natively over its own HTTP/SSE server
-    /// protocol (`opencode serve` — the same wire the opencode desktop app
-    /// speaks).
-    Opencode,
-    /// google's antigravity agent over acp (`agy_acp_server`, installed from
-    /// its pinned release archive).
-    Antigravity,
-    /// Test harness; never shown in production pickers.
+    /// Test harness identity; never registered in production or shown in pickers.
     Mock,
 }
 
@@ -49,7 +35,7 @@ pub enum HarnessInstallSource {
     Homebrew,
     Cargo,
     Vendor,
-    ManagedByZeron,
+    ManagedByPaku,
     #[default]
     Unknown,
 }
@@ -153,11 +139,6 @@ pub enum ReasoningLevel {
     High,
     XHigh,
     Max,
-    Ultra,
-    /// xhigh + harness-specific setting.
-    Ultracode,
-    /// Prompt-prefix driven (Claude).
-    Ultrathink,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -232,7 +213,7 @@ pub struct RunRequest {
     /// Absolute paths of image attachments already staged on the run device
     /// (composer uploads: UploadChunk/UploadCommit → durable path). The same
     /// paths also ride the prompt text as `Attached images (local files …)`
-    /// refs (zeron's `withAttachments` transport — that's what persists in the
+    /// refs (paku's `withAttachments` transport — that's what persists in the
     /// doc); this field additionally lets a harness inline the bytes as image
     /// content blocks. Additive + serde-defaulted for wire compat.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -243,20 +224,18 @@ pub struct RunRequest {
     /// host ignores it and runs in `cwd` (the repo's main checkout).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorktreeSpec>,
-    /// Zeron's own MCP server, injected by the HOST engine as it starts the
-    /// run: the `zeron mcp` subcommand of this same binary, pointed at the
+    /// Paku's own MCP server, injected by the HOST engine as it starts the
+    /// run: the `paku mcp` subcommand of this same binary, pointed at the
     /// engine's loopback IPC and stamped with the originating chat so the
     /// agent can spawn, read, and message side chats. Additive +
     /// serde-defaulted — an old host leaves it unset and the agent simply has
-    /// no Zeron tools; title runs never carry it.
+    /// no Paku tools; title runs never carry it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<McpServer>,
 }
 
-/// A stdio MCP server the harness should add to the agent's session, on top
-/// of whatever the user configured. Each driver spells it in its own dialect
-/// (Claude `--mcp-config`, ACP `session/new` `mcpServers`, Codex
-/// `mcp_servers.*` config overrides).
+/// A stdio MCP server Pi should add to the session, on top of the user's
+/// configuration, through the native Pi extension bridge.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServer {
@@ -278,7 +257,7 @@ pub struct McpServer {
 pub struct WorktreeSpec {
     /// The repo whose worktree to create (the space's folder on the host).
     pub repo_path: String,
-    /// Base ref the fresh `zeron/<name>` branch is created off.
+    /// Base ref the fresh `paku/<name>` branch is created off.
     pub base: String,
     /// Owning project used to resolve host-local setup Actions. Optional for
     /// wire compatibility with clients that only request worktree creation.
@@ -545,7 +524,7 @@ pub enum DoneStatus {
 
 /// The normalized streaming event every harness emits.
 ///
-/// Mirrors zeron's `AgentEvent` tagged enum.
+/// Mirrors paku's `AgentEvent` tagged enum.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum AgentEvent {
@@ -783,17 +762,37 @@ mod tests {
     }
 
     #[test]
-    fn harness_id_uses_kebab_case() {
-        assert_eq!(
-            serde_json::to_string(&HarnessId::ClaudeCode).unwrap(),
-            "\"claude-code\""
-        );
+    fn harness_id_is_pi_by_default_and_rejects_removed_wire_identities() {
+        assert_eq!(HarnessId::default(), HarnessId::Pi);
+        for (id, wire) in [(HarnessId::Pi, "pi"), (HarnessId::Mock, "mock")] {
+            let json = serde_json::to_string(&id).unwrap();
+            assert_eq!(json, format!("\"{wire}\""));
+            assert_eq!(serde_json::from_str::<HarnessId>(&json).unwrap(), id);
+        }
+        for wire in [
+            "claude-code",
+            "codex",
+            "cursor",
+            "devin",
+            "grok",
+            "hermes",
+            "opencode",
+            "antigravity",
+            "openai",
+            "anthropic",
+            "unknown",
+        ] {
+            assert!(
+                serde_json::from_value::<HarnessId>(serde_json::json!(wire)).is_err(),
+                "{wire}"
+            );
+        }
     }
 
     #[test]
     fn harness_update_status_uses_stable_wire_names() {
         let status = HarnessUpdateStatus {
-            harness: HarnessId::ClaudeCode,
+            harness: HarnessId::Pi,
             installed_version: Some("1.0.0".into()),
             latest_version: Some("1.1.0".into()),
             channel: Some("stable".into()),
@@ -804,10 +803,12 @@ mod tests {
             checked_at: Some(42),
             error: None,
             can_apply: true,
-            manual_command: Some("claude update".into()),
+            manual_command: Some(
+                "npm install -g --ignore-scripts @earendil-works/pi-coding-agent".into(),
+            ),
         };
         let json = serde_json::to_value(&status).unwrap();
-        assert_eq!(json["harness"], "claude-code");
+        assert_eq!(json["harness"], "pi");
         assert_eq!(json["installedVersion"], "1.0.0");
         assert_eq!(json["policy"], "auto-when-idle");
         assert_eq!(json["phase"], "waiting-for-idle");
@@ -828,7 +829,7 @@ mod tests {
     #[test]
     fn manual_checks_do_not_claim_an_available_update() {
         let mut status: HarnessUpdateStatus = serde_json::from_value(serde_json::json!({
-            "harness": "cursor",
+            "harness": "pi",
             "phase": "manual-action-required",
             "canApply": true,
         }))

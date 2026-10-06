@@ -1,5 +1,7 @@
 # Composer performance validation — PR #271
 
+> Historical upstream **Zeron** evidence, not Paku verification. Recorded revisions, paths and hashes are preserved; reproduction commands apply only to those upstream revisions. Current Paku verification: `scripts/verify-paku.sh`.
+
 The audit found and fixed an unbounded repaint loop in the earlier PR. Intrinsic
 layout measured the editor at a provisional 320px width and then its resolved
 width. Notifying the composer for both heights scheduled another layout forever

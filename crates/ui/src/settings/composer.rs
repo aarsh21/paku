@@ -1,5 +1,5 @@
 //! Sticky composer defaults — the new-chat "remember my last picks" store
-//! (zeron parity: localStorage `zeron.composer.defaults:v1`, defaults.ts).
+//! (paku parity: localStorage `paku.composer.defaults:v1`, defaults.ts).
 //!
 //! A small JSON file beside `ui-settings.json` (that file is the shell's and
 //! is saved debounced from its own boot-time copy, so the composer keeps its
@@ -15,14 +15,14 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use zeron_proto::{HarnessId, ReasoningLevel};
+use paku_proto::{HarnessId, ReasoningLevel};
 
 const FILE_NAME: &str = "composer-defaults.json";
 
 /// Model option picks: option id → choice id (the `ChatConfig` shape).
 pub type ModelOptions = serde_json::Map<String, serde_json::Value>;
 
-/// Remembered model per harness — id plus display label, mirroring zeron's
+/// Remembered model per harness — id plus display label, mirroring paku's
 /// `modelByHarness` storing the full `Model` object "so the pill never flashes
 /// a raw id or 'Default'".
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -48,7 +48,7 @@ pub struct ComposerDefaults {
     pub harness: Option<HarnessId>,
     /// Last model picked, per harness (restored on harness switch).
     pub model_by_harness: HashMap<HarnessId, RememberedModel>,
-    /// Last reasoning level picked (global, like zeron's `reasoning` key).
+    /// Last reasoning level picked (global, like paku's `reasoning` key).
     /// The fallback for models with no level of their own yet.
     pub reasoning: Option<ReasoningLevel>,
     /// Last reasoning level picked per harness and model id, so switching
@@ -57,7 +57,7 @@ pub struct ComposerDefaults {
     /// Last non-default model option picks (option id → choice id), per
     /// harness and model id. Model-scoped because each pick was validated
     /// against that model's catalog row, so it stays safe to send before the
-    /// catalog reloads (the Claude harness appends `[1m]` to any model id).
+    /// catalog reloads.
     pub model_options_by_model: HashMap<HarnessId, HashMap<String, ModelOptions>>,
     /// Every model label ever seen (id → label), fed from catalog loads.
     /// The chip's fallback while a harness's list is still loading — a
@@ -126,7 +126,7 @@ impl ComposerDefaults {
         self.model_by_harness.get(&harness)
     }
 
-    /// Remember a pick (zeron `saveDefaults({ harness, modelByHarness })`).
+    /// Remember a pick (paku `saveDefaults({ harness, modelByHarness })`).
     pub fn remember_model(&mut self, harness: HarnessId, id: String, label: String) {
         self.harness = Some(harness);
         self.model_by_harness
@@ -225,24 +225,26 @@ mod tests {
     fn round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let mut defaults = ComposerDefaults {
-            harness: Some(HarnessId::ClaudeCode),
+            harness: Some(HarnessId::Pi),
             reasoning: Some(ReasoningLevel::XHigh),
             ..Default::default()
         };
         defaults.remember_model(
-            HarnessId::ClaudeCode,
-            "claude-fable-5".into(),
+            HarnessId::Pi,
+            "anthropic/claude-fable-5".into(),
             "Fable 5".into(),
         );
-        defaults.remember_model(HarnessId::Codex, "gpt-5.2-codex".into(), "GPT-5.2".into());
         defaults
-            .model_options_mut(HarnessId::ClaudeCode, "claude-fable-5")
+            .model_options_mut(HarnessId::Pi, "anthropic/claude-fable-5")
             .insert("contextWindow".into(), "1m".into());
+        defaults
+            .model_options_mut(HarnessId::Pi, "openai-codex/gpt-5.2-codex")
+            .insert("verbosity".into(), "high".into());
         defaults.save(dir.path()).unwrap();
         let loaded = ComposerDefaults::load(dir.path());
         assert_eq!(loaded, defaults);
         assert_eq!(
-            loaded.model_for(HarnessId::ClaudeCode).map(|m| &*m.label),
+            loaded.model_for(HarnessId::Pi).map(|m| &*m.label),
             Some("Fable 5")
         );
     }
@@ -290,29 +292,72 @@ mod tests {
     fn favorites_toggle_and_persist() {
         let dir = tempfile::tempdir().unwrap();
         let mut defaults = ComposerDefaults::default();
-        assert!(defaults.toggle_favorite(HarnessId::ClaudeCode, "claude-opus-5"));
-        assert!(defaults.toggle_favorite(HarnessId::Codex, "gpt-5.2-codex"));
-        assert!(defaults.is_favorite(HarnessId::ClaudeCode, "claude-opus-5"));
-        // Same id under a different harness is a distinct star.
-        assert!(!defaults.is_favorite(HarnessId::Codex, "claude-opus-5"));
+        assert!(defaults.toggle_favorite(HarnessId::Pi, "anthropic/claude-opus-5"));
+        assert!(defaults.toggle_favorite(HarnessId::Pi, "openai-codex/gpt-5.2-codex"));
+        assert!(defaults.is_favorite(HarnessId::Pi, "anthropic/claude-opus-5"));
+        assert!(!defaults.is_favorite(HarnessId::Mock, "anthropic/claude-opus-5"));
         defaults.save(dir.path()).unwrap();
         assert_eq!(ComposerDefaults::load(dir.path()), defaults);
         // Untoggle removes, preserving the other's order.
-        assert!(!defaults.toggle_favorite(HarnessId::ClaudeCode, "claude-opus-5"));
-        assert!(!defaults.is_favorite(HarnessId::ClaudeCode, "claude-opus-5"));
-        assert!(defaults.is_favorite(HarnessId::Codex, "gpt-5.2-codex"));
+        assert!(!defaults.toggle_favorite(HarnessId::Pi, "anthropic/claude-opus-5"));
+        assert!(!defaults.is_favorite(HarnessId::Pi, "anthropic/claude-opus-5"));
+        assert!(defaults.is_favorite(HarnessId::Pi, "openai-codex/gpt-5.2-codex"));
     }
 
     #[test]
     fn remember_model_updates_harness_and_row() {
         let mut defaults = ComposerDefaults::default();
-        defaults.remember_model(HarnessId::Codex, "m1".into(), "One".into());
-        defaults.remember_model(HarnessId::Codex, "m2".into(), "Two".into());
-        assert_eq!(defaults.harness, Some(HarnessId::Codex));
+        defaults.remember_model(HarnessId::Pi, "m1".into(), "One".into());
+        defaults.remember_model(HarnessId::Pi, "m2".into(), "Two".into());
+        assert_eq!(defaults.harness, Some(HarnessId::Pi));
         assert_eq!(
-            defaults.model_for(HarnessId::Codex).map(|m| &*m.id),
+            defaults.model_for(HarnessId::Pi).map(|m| &*m.id),
             Some("m2")
         );
-        assert!(defaults.model_for(HarnessId::ClaudeCode).is_none());
+        assert!(defaults.model_for(HarnessId::Mock).is_none());
+    }
+
+    #[test]
+    fn pi_model_providers_keep_separate_reasoning_and_options() {
+        let mut defaults = ComposerDefaults::default();
+        defaults.remember_reasoning(
+            HarnessId::Pi,
+            Some("anthropic/claude-opus-5"),
+            ReasoningLevel::High,
+        );
+        defaults.remember_reasoning(
+            HarnessId::Pi,
+            Some("openai-codex/gpt-5.2"),
+            ReasoningLevel::Low,
+        );
+        defaults
+            .model_options_mut(HarnessId::Pi, "anthropic/claude-opus-5")
+            .insert("contextWindow".into(), "1m".into());
+        defaults
+            .model_options_mut(HarnessId::Pi, "openai-codex/gpt-5.2")
+            .insert("verbosity".into(), "high".into());
+        let loaded: ComposerDefaults =
+            serde_json::from_value(serde_json::to_value(&defaults).unwrap()).unwrap();
+        assert_eq!(
+            loaded.reasoning_for(HarnessId::Pi, Some("anthropic/claude-opus-5")),
+            Some(ReasoningLevel::High)
+        );
+        assert_eq!(
+            loaded.reasoning_for(HarnessId::Pi, Some("openai-codex/gpt-5.2")),
+            Some(ReasoningLevel::Low)
+        );
+        assert_eq!(
+            loaded
+                .model_options_for(HarnessId::Pi, "anthropic/claude-opus-5")
+                .unwrap()["contextWindow"],
+            "1m"
+        );
+        assert!(
+            loaded
+                .model_options_for(HarnessId::Pi, "openai-codex/gpt-5.2")
+                .unwrap()
+                .get("contextWindow")
+                .is_none()
+        );
     }
 }

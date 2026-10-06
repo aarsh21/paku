@@ -8,8 +8,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::*;
+use paku_text::*;
 use unicode_segmentation::UnicodeSegmentation;
-use zeron_text::*;
 
 /// Independent rustybuzz shaping of `text` in Geist at `size` (default features: kerning and
 /// standard ligatures, like the fixture's sans style).

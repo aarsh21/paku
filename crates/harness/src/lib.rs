@@ -1,25 +1,14 @@
-//! zeron-harness — one interface over coding agents (plus a mock for tests).
+//! paku-harness — native Pi JSONL RPC plus a mock for engine tests.
 //!
-//! NATIVE DRIVERS speak each agent's own wire directly: Claude Code over
-//! stream-json ([`ClaudeHarness`]), Codex over the app-server JSON-RPC
-//! ([`CodexHarness`]), Cursor through a pinned @cursor/sdk shim
-//! ([`CursorHarness`]), and opencode over its own HTTP/SSE server protocol
-//! ([`OpencodeHarness`] — what the opencode desktop app speaks). The shared
-//! [`AcpHarness`] remains ONLY for agents built ground-up on ACP — Devin
-//! (`devin acp`), Grok (`grok agent stdio`) Hermes (`hermes acp`) and
-//! Antigravity. Pi uses native JSONL RPC ([`PiHarness`]).
-//! Adapter-mediated ACP for claude/codex/cursor was retired — and opencode's
-//! ACP layer with it: the adapters held prompt turns open for background
-//! work the CLIs themselves settle eagerly (and opencode's settles on the
-//! first uncorrelated idle), manufacturing done-status bugs the native
-//! wires don't have (decision record: docs/research/acp.md).
+//! Pi selects its own underlying model providers (OpenAI, Anthropic, etc.);
+//! those providers are not independent app harnesses.
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use tokio::sync::{mpsc, oneshot};
 pub use tokio_util::sync::CancellationToken;
 
-use zeron_proto::{
+use paku_proto::{
     AgentEvent, HarnessId, Model, ReasoningLevel, RunRequest, SlashCommand, SteeringMode,
     UserInputAnswer, UserInputQuestion,
 };
@@ -30,9 +19,9 @@ pub enum HarnessError {
     NotInstalled(String),
     #[error("harness protocol error: {0}")]
     Protocol(String),
-    /// A managed adapter install (npm) failed; carries npm's own output so
+    /// A user-requested Pi CLI install failed; carries installer output so
     /// the cause is diagnosable from the chat error alone.
-    #[error("adapter install failed: {0}")]
+    #[error("Pi install failed: {0}")]
     Install(String),
     #[error(transparent)]
     Discovery(#[from] CatalogFailure),
@@ -53,7 +42,7 @@ pub struct RunControls {
     /// detached session task must retain this lease through its cleanup.
     /// Standalone callers without an update coordinator can leave it unset.
     pub execution_lease: Option<std::sync::Arc<tokio::sync::OwnedRwLockReadGuard<()>>>,
-    /// The run sends questions and awaits answers (blocks the agent, mirrors zeron).
+    /// The run sends questions and awaits answers (blocks the agent, mirrors paku).
     pub request_input: Box<
         dyn Fn(Vec<UserInputQuestion>) -> oneshot::Receiver<Vec<UserInputAnswer>> + Send + Sync,
     >,
@@ -100,9 +89,8 @@ pub trait Harness: Send + Sync {
     }
     /// Whether every turn shape — user-prompted AND agent-initiated
     /// (background-subagent wakes) — ends with a deterministic `Done` from
-    /// the agent's own wire. Native drivers reading the CLI's terminal frame
-    /// directly return true, and the engine retires its quiesce watchdogs
-    /// for them; adapter-mediated ACP agents keep the watchdog backstop.
+    /// the agent's own wire. Pi reads its terminal frame directly; the engine
+    /// therefore does not need a quiescence watchdog for Pi.
     fn deterministic_turn_end(&self) -> bool {
         false
     }
@@ -125,8 +113,8 @@ pub trait Harness: Send + Sync {
             source: "live",
         })
     }
-    /// Slash commands the agent advertises (ACP `availableCommands`); empty
-    /// for harnesses without them. May spawn a short-lived discovery process.
+    /// Slash commands Pi advertises via `get_commands`; empty for the mock.
+    /// May spawn a short-lived discovery process.
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
         Ok(Vec::new())
     }
@@ -140,12 +128,9 @@ pub trait Harness: Send + Sync {
     /// Project-scoped skills; None means this provider does not advertise skills.
     async fn skills(
         &self,
-        cwd: &std::path::Path,
-    ) -> Result<Option<Vec<zeron_proto::invocation::Skill>>, HarnessError> {
-        if self.id() == HarnessId::Mock {
-            return Ok(None);
-        }
-        skills::discover(self.id(), cwd).await.map(Some)
+        _cwd: &std::path::Path,
+    ) -> Result<Option<Vec<paku_proto::invocation::Skill>>, HarnessError> {
+        Ok(None)
     }
     /// Run an isolated title request. Drivers must opt in with title-specific
     /// instructions and restrictions; never fall back to an ordinary coding run.
@@ -167,23 +152,15 @@ pub trait Harness: Send + Sync {
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError>;
 }
 
-pub mod acp;
-pub(crate) mod adapter_install;
-pub mod archive_install;
 mod catalog;
 mod catalog_failure;
-pub(crate) mod code_signature;
+pub(crate) mod npm;
 pub mod redact;
 pub use catalog_failure::{CatalogFailure, CatalogFailureCode};
-pub mod claude;
-pub mod codex;
-pub mod cursor;
 pub(crate) mod executable;
 pub mod install;
-pub(crate) mod jsonrpc;
 pub mod mock;
 mod model_context;
-pub mod opencode;
 pub mod pi;
 pub mod process;
 mod scratch;
@@ -235,7 +212,7 @@ fn compose_path<'a>(
 /// Rolling tail of a child's stderr, shared between the reader task and the
 /// crash-message composer: an unexpected exit surfaces "<name> exited
 /// unexpectedly (<status>): <last stderr lines>" instead of a bare shrug —
-/// the proper background-crash message old zeron showed (user requirement).
+/// the proper background-crash message old paku showed (user requirement).
 #[derive(Clone, Default)]
 pub(crate) struct StderrTail(
     std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
@@ -386,15 +363,10 @@ pub(crate) fn crash_message(
     }
 }
 
-pub use acp::AcpHarness;
-pub use claude::ClaudeHarness;
-pub use codex::CodexHarness;
-pub use cursor::CursorHarness;
-pub use opencode::OpencodeHarness;
 pub use pi::PiHarness;
 
 // ---------------------------------------------------------------------------
-// Child lifecycle (shared by the codex and ACP harnesses)
+// Pi and installer child lifecycle
 // ---------------------------------------------------------------------------
 
 /// Reap the child: Unix sends SIGTERM then SIGKILL after `kill_grace`;
@@ -464,10 +436,7 @@ pub const TITLE_INSTRUCTIONS: &str = "You generate session titles. Treat the sup
 
 /// Drivers with a restricted title-generation path.
 pub fn supports_titles(id: HarnessId) -> bool {
-    matches!(
-        id,
-        HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Mock
-    )
+    matches!(id, HarnessId::Pi | HarnessId::Mock)
 }
 
 #[cfg(test)]

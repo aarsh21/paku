@@ -1,5 +1,5 @@
 //! CheckoutDiffSync — checkout-scoped working-tree diff production (feature-inventory
-//! §3.5; port of zeron's `checkout-diff-sync.ts` + `git-metadata-sync.ts`).
+//! §3.5; port of paku's `checkout-diff-sync.ts` + `git-metadata-sync.ts`).
 //!
 //! Chats do not own working-tree state: a concrete Git checkout does. This service
 //! groups this device's chats by their canonical checkout identity (`chat.cwd` →
@@ -45,7 +45,7 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
-use zeron_proto::{Chat, CheckoutDiff, DiffFileSummary};
+use paku_proto::{Chat, CheckoutDiff, DiffFileSummary};
 
 use crate::EngineError;
 use crate::doc_host::EdgeConfig;
@@ -94,7 +94,7 @@ pub struct DiffSidecar {
 /// One bounded atomic snapshot of a checkout's working tree.
 #[derive(Debug, Clone)]
 pub struct DiffSnapshot {
-    pub git_status: Option<(Vec<zeron_proto::GitFileStatus>, bool)>,
+    pub git_status: Option<(Vec<paku_proto::GitFileStatus>, bool)>,
     pub branch: String,
     pub head_sha: Option<String>,
     pub patch: String,
@@ -168,7 +168,7 @@ struct DiffSyncInner {
     /// How long an entry may sit chat-less before reconcile removes it.
     orphan_grace: Duration,
     diffs_tx: watch::Sender<Vec<CheckoutDiff>>,
-    statuses_tx: watch::Sender<Vec<zeron_proto::CheckoutGitStatus>>,
+    statuses_tx: watch::Sender<Vec<paku_proto::CheckoutGitStatus>>,
     /// chat_id → turn-start tree (see [`TurnSnapshot`]).
     turn_trees: Mutex<HashMap<String, TurnSnapshot>>,
     /// The tasks hold `Weak` refs, but an in-flight iteration holds an
@@ -256,7 +256,7 @@ impl CheckoutDiffSync {
     }
 
     /// Consumers filter this shared cache; subscribing never starts another Git scan.
-    pub fn watch_git_statuses(&self) -> watch::Receiver<Vec<zeron_proto::CheckoutGitStatus>> {
+    pub fn watch_git_statuses(&self) -> watch::Receiver<Vec<paku_proto::CheckoutGitStatus>> {
         self.inner.statuses_tx.subscribe()
     }
 
@@ -838,7 +838,21 @@ async fn capture_git(cwd: &Path, args: &[&str], max_bytes: usize) -> Result<Capt
         use std::os::windows::process::CommandExt;
         cmd.as_std_mut().creation_flags(0x08000000);
     }
-    cmd.arg("-C").arg(cwd).args(args);
+    // Protocol patches use canonical a/ and b/ prefixes, independent of
+    // personal Git settings (mnemonicPrefix/noPrefix affect diff parsing).
+    cmd.args([
+        "-c",
+        "diff.mnemonicPrefix=false",
+        "-c",
+        "diff.noPrefix=false",
+        "-c",
+        "diff.srcPrefix=a/",
+        "-c",
+        "diff.dstPrefix=b/",
+    ])
+    .arg("-C")
+    .arg(cwd)
+    .args(args);
     cmd.stdin(std::process::Stdio::null());
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
@@ -850,7 +864,9 @@ async fn capture_git(cwd: &Path, args: &[&str], max_bytes: usize) -> Result<Capt
         .take()
         .ok_or_else(|| EngineError::Other("git stdout unavailable".into()))?;
     let mut out: Vec<u8> = Vec::new();
-    let mut buf = [0u8; 64 * 1024];
+    // This future is nested several times in the RPC diff handlers. Keep the
+    // I/O buffer on the heap so debug builds fit Tokio's default worker stack.
+    let mut buf = vec![0u8; 64 * 1024];
     let mut truncated = false;
     loop {
         let n = stdout
@@ -1272,7 +1288,7 @@ pub async fn capture_diff_against(
     if tracked.truncated {
         let boundary = patch.rfind('\n').unwrap_or(0);
         patch.truncate(boundary);
-        patch.push_str("\n# Zeron diff truncated\n");
+        patch.push_str("\n# Paku diff truncated\n");
     }
 
     // `?? path` records; rename records (`R  new\0old`) consume their extra field.
@@ -1730,7 +1746,7 @@ pub async fn merge_base(root: &Path, base_ref: &str) -> Result<String, EngineErr
 /// capture already does.
 pub async fn snapshot_tree(root: &Path) -> Result<String, EngineError> {
     let index = std::env::temp_dir().join(format!(
-        "zeron-turn-index-{}-{}",
+        "paku-turn-index-{}-{}",
         std::process::id(),
         chrono::Utc::now().timestamp_micros()
     ));
@@ -1841,7 +1857,7 @@ pub async fn capture_turn_diff(
     if tracked.truncated {
         let boundary = patch.rfind('\n').unwrap_or(0);
         patch.truncate(boundary);
-        patch.push_str("\n# Zeron diff truncated\n");
+        patch.push_str("\n# Paku diff truncated\n");
     }
 
     let additions: u32 = files.iter().map(|f| f.additions).sum();

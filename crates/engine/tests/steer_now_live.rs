@@ -1,36 +1,26 @@
-//! Opt-in real-model check that a steer takes effect IMMEDIATELY, the way
-//! Codex's `turn/steer` does: while the agent is still streaming a long
+//! Opt-in real-model check that a steer takes effect IMMEDIATELY:
+//! while the Pi agent is still streaming a long
 //! answer (a long story), the composer queues a row and the user presses Steer
 //! (`QueueMessage` + `SteerQueuedMessageNow`, exactly what the UI sends).
 //! The current answer must stop early and the steer must be answered within
 //! the same live runtime — not after the long answer finishes.
 //!
-//! ZERON_TEST_HARNESS=codex cargo test -p zeron-engine --test steer_now_live -- --ignored --nocapture
+//! PAKU_TEST_HARNESS=pi cargo test -p paku-engine --test steer_now_live -- --ignored --nocapture
+use paku_doc::{MessagePart, MessageRole, SessionCommandPayload, SessionMessageEntry};
+use paku_engine::{EngineCore, HarnessRegistry};
+use paku_harness::{Harness, PiHarness};
+use paku_proto::{ChatConfig, RunRequest, SandboxLevel, SessionStatus};
 use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use zeron_doc::{MessagePart, MessageRole, SessionCommandPayload, SessionMessageEntry};
-use zeron_engine::{EngineCore, HarnessRegistry};
-use zeron_harness::{
-    AcpHarness, ClaudeHarness, CodexHarness, CursorHarness, Harness, OpencodeHarness,
-};
-use zeron_proto::{ChatConfig, RunRequest, SandboxLevel, SessionStatus};
 
 const CHAT: &str = "steer-now";
 
 fn harness(name: &str) -> Arc<dyn Harness> {
     match name {
-        "claude" => Arc::new(ClaudeHarness::new()),
-        "codex" => Arc::new(CodexHarness::new()),
-        "cursor" => Arc::new(CursorHarness::new()),
-        "opencode" => Arc::new(OpencodeHarness::new()),
-        "grok" => Arc::new(AcpHarness::grok()),
-        "devin" => Arc::new(AcpHarness::devin()),
-        "hermes" => Arc::new(AcpHarness::hermes()),
-        "pi" => Arc::new(zeron_harness::PiHarness::new()),
-        "antigravity" => Arc::new(AcpHarness::antigravity()),
-        _ => panic!("unknown harness {name}"),
+        "pi" => Arc::new(PiHarness::new()),
+        _ => panic!("unsupported harness {name}; select pi"),
     }
 }
 
@@ -78,9 +68,9 @@ fn dump(entries: &[SessionMessageEntry]) -> String {
 #[tokio::test]
 #[ignore = "uses real model quota; select the harness explicitly"]
 async fn steer_now_interrupts_a_streaming_answer() {
-    let name = std::env::var("ZERON_TEST_HARNESS").expect("select harness");
-    let model = std::env::var("ZERON_TEST_MODEL").ok();
-    let bursts: usize = std::env::var("ZERON_TEST_BURST")
+    let name = std::env::var("PAKU_TEST_HARNESS").expect("select harness");
+    let model = std::env::var("PAKU_TEST_MODEL").ok();
+    let bursts: usize = std::env::var("PAKU_TEST_BURST")
         .ok()
         .map(|b| b.parse().unwrap())
         .unwrap_or(1);
@@ -168,9 +158,9 @@ async fn steer_now_interrupts_a_streaming_answer() {
     }
     let words_at_steer = assistant_text(&entries()).split_whitespace().count();
     let steer_at = Instant::now();
-    // ZERON_TEST_CLICK_GAP_MS: the UI flow of queueing every message first
+    // PAKU_TEST_CLICK_GAP_MS: the UI flow of queueing every message first
     // (Enter while busy) and then pressing Steer on each row in turn.
-    if let Some(gap) = std::env::var("ZERON_TEST_CLICK_GAP_MS")
+    if let Some(gap) = std::env::var("PAKU_TEST_CLICK_GAP_MS")
         .ok()
         .map(|g| Duration::from_millis(g.parse().unwrap()))
     {
@@ -194,7 +184,7 @@ async fn steer_now_interrupts_a_streaming_answer() {
             assert!(core.doc_host.steer_queued_now(CHAT, &row).await.unwrap());
         }
     }
-    for i in (0..bursts).filter(|_| std::env::var("ZERON_TEST_CLICK_GAP_MS").is_err()) {
+    for i in (0..bursts).filter(|_| std::env::var("PAKU_TEST_CLICK_GAP_MS").is_err()) {
         let word = format!("PINEAPPLE{i}");
         let row = core
             .doc_host

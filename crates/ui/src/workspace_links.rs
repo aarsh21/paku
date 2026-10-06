@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
-const FILE_MENTION_SCHEME: &str = "zeron-file:";
+const FILE_MENTION_SCHEME: &str = "paku-file:";
 
 /// Where a classified file link sits relative to a surface's ordered roots.
 #[derive(Debug, PartialEq, Eq)]
@@ -194,9 +194,8 @@ pub(crate) fn resolve_inline_code_path(
         // target the link grammar rejects, turning the span into a dead link,
         // so it keeps its inline-code look instead.
         let path = path.to_string_lossy();
-        path.starts_with('/').then(|| {
-            InlineCodePath::File(format!("file://{}{anchor}", percent_encode_path(&path)))
-        })
+        path.starts_with('/')
+            .then(|| InlineCodePath::File(format!("file://{}{anchor}", percent_encode_path(&path))))
     };
     if let Some(rest) = decoded.strip_prefix("~/") {
         let home = std::env::var_os("HOME").filter(|home| !home.is_empty())?;
@@ -261,7 +260,7 @@ struct ClassifiedLink {
 }
 
 enum ClassifiedKind {
-    /// `zeron-file:` mention — resolution stays inside-or-unresolved.
+    /// `paku-file:` mention — resolution stays inside-or-unresolved.
     Mention,
     /// Root-relative path.
     Relative,
@@ -317,7 +316,7 @@ fn classify_file_link(target: &str) -> Option<ClassifiedLink> {
         return None;
     }
 
-    // `zeron-file:` mentions keep their strict canonical spelling: the whole
+    // `paku-file:` mentions keep their strict canonical spelling: the whole
     // path decodes once and must re-encode to the identical string.
     if let Some(encoded) = target.strip_prefix(FILE_MENTION_SCHEME) {
         let decoded = percent_decode_path(encoded)?;
@@ -1083,22 +1082,22 @@ mod tests {
     #[test]
     fn resolves_canonical_file_mentions() {
         assert_eq!(
-            resolve_workspace_file_link("zeron-file:src/a%20file.rs", "/work/comet"),
+            resolve_workspace_file_link("paku-file:src/a%20file.rs", "/work/comet"),
             Some(link("src/a file.rs", None, None))
         );
-        assert!(resolve_workspace_file_link("zeron-file:src/%61.rs", "/work/comet").is_none());
-        assert!(resolve_workspace_file_link("zeron-file:src/", "/work/comet").is_none());
+        assert!(resolve_workspace_file_link("paku-file:src/%61.rs", "/work/comet").is_none());
+        assert!(resolve_workspace_file_link("paku-file:src/", "/work/comet").is_none());
         // Mentions with dotted-less names keep resolving like before.
         assert_eq!(
-            resolve_workspace_file_link("zeron-file:Makefile", "/work/comet"),
+            resolve_workspace_file_link("paku-file:Makefile", "/work/comet"),
             Some(link("Makefile", None, None))
         );
         // An absolute mention resolves inside its root or not at all — it is
         // never an outside link.
         assert_eq!(
-            resolve_workspace_file_link("zeron-file:/work/comet/a.md", "/work/comet"),
+            resolve_workspace_file_link("paku-file:/work/comet/a.md", "/work/comet"),
             Some(link("a.md", None, None))
         );
-        assert!(resolve_workspace_file_link("zeron-file:/tmp/a.md", "/work/comet").is_none());
+        assert!(resolve_workspace_file_link("paku-file:/tmp/a.md", "/work/comet").is_none());
     }
 }

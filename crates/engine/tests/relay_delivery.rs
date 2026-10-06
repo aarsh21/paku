@@ -25,14 +25,14 @@ use tokio_tungstenite::tungstenite::handshake::server::{
     Request as WsRequest, Response as WsResponse,
 };
 
-use zeron_doc::{MessageRole, MessageStatus, SessionCommandPayload};
-use zeron_engine::{EngineCore, HarnessRegistry};
-use zeron_harness::{Harness, HarnessError, RunControls};
-use zeron_proto::{
+use paku_doc::{MessageRole, MessageStatus, SessionCommandPayload};
+use paku_engine::{EngineCore, HarnessRegistry};
+use paku_harness::{Harness, HarnessError, RunControls};
+use paku_proto::{
     AgentEvent, Device, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SandboxLevel,
     SteeringMode,
 };
-use zeron_rpc::{
+use paku_rpc::{
     DeviceFrameHeader, LinkCache, LinkCacheConfig, StaticToken, decode_device_frame,
     encode_device_frame, methods,
 };
@@ -224,10 +224,9 @@ async fn rows_dark_command_delivers_over_the_peer_relay_exactly_once() {
         last_seen_at: Some(chrono::Utc::now()),
         created_at: None,
         version: Some("0.2.12".into()),
-        cursor_sdk_version: None,
-        capabilities: zeron_proto::capabilities::current(),
+        capabilities: paku_proto::capabilities::current(),
     });
-    let client_a = zeron_rpc::memory_client(core_a.rpc_service());
+    let client_a = paku_rpc::memory_client(core_a.rpc_service());
     client_a
         .call(
             methods::MUTATE,

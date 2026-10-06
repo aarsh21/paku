@@ -1,56 +1,25 @@
-# Zeron
+# Paku
 
-コーディングエージェント（Claude Code、Codex、Cursor、Devin、Grok、Hermes、Pi、Antigravity）をデフォルトではローカルで管理し、必要に応じて複数デバイス間で同期することもできます。
+Paku は [Pi](https://github.com/badlogic/pi-mono) 向けのローカルファーストなネイティブデスクトップ／ヘッドレスアプリです。[Zeron](https://github.com/zeronsh/zeron) の **Pi 専用フォーク**であり、元のアプリ・設計・実装の功績は Zeron の貢献者に帰属します。Zeron や Pi の公式製品ではない独立したプロジェクトです。
 
-*[English](README.md) | [简体中文](README.zh-CN.md) | [한국어](README.ko.md) | 日本語*
+[English](README.md) | [简体中文](README.zh-CN.md) | [한국어](README.ko.md) | 日本語
 
-![Zeron デスクトップアプリ](docs/media/readme/app-screenshot.jpg)
+## ソースから実行
 
-## デスクトップアプリ
+`rust-toolchain.toml` で指定された Rust、[各プラットフォームのビルド依存関係](dist/README.md)、認証済みの Pi CLI（0.85.1 以降）が必要です。
 
-[GitHub Releases](https://github.com/zeronsh/zeron/releases/latest) から、お使いのプラットフォーム向けの最新版をダウンロードしてください。
-
-- **macOS** — `zeron-<version>-macos-arm64.dmg`
-- **Windows** — `zeron-<version>-windows-x86_64-setup.exe`
-- **Linux** — `zeron-<version>-linux-<arch>.tar.gz` を展開し、中の `install.sh` を実行
-
-アカウントもネットワーク接続も不要で、セッションはお使いのデバイスに保存されます。アプリは自動でアップデートされます。
-
-## ヘッドレス実行（CLI）
-
-サーバーなど、ディスプレイのないマシン向けです。たとえば、ノートパソコンを閉じたあともエージェントを動かし続ける VPS に使えます。Linux のみ対応しています。
-
-```bash
-curl -fsSL https://zeron.sh/install.sh | sh
-zeron status
+```sh
+git clone https://github.com/aarsh21/paku.git
+cd paku
+cargo run -p paku
+# ヘッドレスモード
+cargo run -p paku -- headless
 ```
 
-インストーラーはエンジンをバックグラウンドサービスとして起動し、再起動後も自動的に立ち上がります。
+Paku は `pi --mode rpc` を直接起動します。`PI_EXECUTABLE` で実行ファイルを選択でき、モデルと認証情報は Pi 側で管理します。[Pi 統合](docs/pi.md)を参照してください。
 
-```bash
-zeron status      # ローカル/同期モードとエンジンの状態を確認
-zeron update      # 最新版にアップデート
-zeron daemon start|stop|restart|status
-```
+ローカルセッションには Paku アカウントは不要で、履歴と添付ファイルはローカルに保存されます。Pi は設定したモデルプロバイダーに接続します。このフォークはホストされた Paku サービスを提供しません。任意の同期機能には自分の Cloudflare リソースと認証設定が必要です。[セルフホスト](docs/self-hosting.md)を参照してください。同じアカウントのデバイスは、ワークスペースの読み書き権限を持つ信頼されたピアです。
 
-## 複数デバイス間の同期（任意）
+当面はソースからビルドしてください。[Paku Releases](https://github.com/aarsh21/paku/releases) は今後公開される成果物の確認先であり、既存のダウンロード、自動更新、公開インストールサービスを保証しません。検証コマンドは [English README](README.md) にあります。
 
-サインインすると、あるデバイスで起動したエージェントを別のデバイスから確認したり操作したりできます。
-
-```bash
-zeron daemon stop
-zeron login        # ローカル専用モードに戻すには zeron logout
-zeron daemon start
-```
-
-同じアカウントにサインインしたデバイスは、互いのワークスペースのファイルを読み書きできます。信頼できるデバイスでのみサインインしてください。既存のローカルセッションがアップロードされることはありません。
-
-## スポンサー
-
-Zeron をスポンサーしてくださっている [The Context Company](https://www.thecontextcompany.com/) に感謝します。[GitHub でスポンサーになって](https://github.com/sponsors/zeronsh) Zeron の開発を支援することもできます。
-
----
-
-開発に参加したい方や仕組みが気になる方は、[Ask DeepWiki](https://deepwiki.com/zeronsh/zeron) または [ARCHITECTURE.md](ARCHITECTURE.md) をご覧ください。
-
-[MIT License](LICENSE) のもとで公開されています。
+[アーキテクチャ](ARCHITECTURE.md) · [MIT ライセンス](LICENSE) · [サードパーティ通知](THIRD_PARTY_NOTICES.md)

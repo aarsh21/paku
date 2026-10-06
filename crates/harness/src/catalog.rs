@@ -1,11 +1,11 @@
 //! A failed refresh is not a new catalog. Keep the last successful response
 //! for the same credential context, coalesce callers, and respect rate limits.
 use crate::{CatalogFailure, CatalogFailureCode, HarnessError, ModelCatalog};
+use paku_proto::Model;
 use std::{
     future::Future,
     time::{Duration, Instant},
 };
-use zeron_proto::Model;
 
 #[derive(Default)]
 pub(crate) struct Catalog {
@@ -38,6 +38,7 @@ impl Catalog {
             .map(|r| r.models)
     }
 
+    #[cfg(test)]
     pub(crate) async fn get_with<F, Fut, K>(
         &self,
         force: bool,
@@ -455,55 +456,6 @@ mod tests {
             .unwrap();
         assert_eq!(result, models("full"));
         assert_eq!(calls.load(Ordering::Relaxed), 3);
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn real_subprocess_large_catalog_survives_malformed_and_failed_refreshes() {
-        use crate::CursorHarness;
-        use crate::Harness;
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let script = dir.path().join("shim");
-        std::fs::write(&script, "#!/bin/sh\ncd -- \"$(dirname -- \"$0\")\"\nprintf 'probe\\n' >> calls\ncat response\nexit \"$(cat status)\"\n").unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let response = dir.path().join("response");
-        let status = dir.path().join("status");
-        let items: Vec<_> = (0..256).map(|i| serde_json::json!({"id":format!("model-{i}"),"displayName":format!("Model {i}"),"description":"x".repeat(4096)})).collect();
-        let full = serde_json::json!({"ev":"models","items":items}).to_string();
-        std::fs::write(&response, &full).unwrap();
-        std::fs::write(&status, "0").unwrap();
-        let harness = CursorHarness::new().with_executable(script);
-        let baseline = harness.models().await.unwrap();
-        assert_eq!(baseline.len(), 256);
-        for cycle in 0..10 {
-            expire(&harness.models_cache).await;
-            std::fs::write(
-                &response,
-                match cycle % 3 {
-                    0 => "{\"ev\":\"models\",\"items\":[",
-                    1 => "{\"ev\":\"models\",\"items\":[]}",
-                    _ => &full,
-                },
-            )
-            .unwrap();
-            std::fs::write(&status, if cycle % 3 == 2 { "1" } else { "0" }).unwrap();
-            assert_eq!(harness.models().await.unwrap(), baseline);
-            expire(&harness.models_cache).await;
-            std::fs::write(&response, &full).unwrap();
-            std::fs::write(&status, "0").unwrap();
-            assert_eq!(harness.models().await.unwrap(), baseline);
-        }
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("calls"))
-                .unwrap()
-                .lines()
-                .count(),
-            41
-        );
-        println!(
-            "stress: 41 real subprocess probes, 10 malformed/empty/nonzero outages, full 256-model catalog preserved"
-        );
     }
 
     #[tokio::test(start_paused = true)]

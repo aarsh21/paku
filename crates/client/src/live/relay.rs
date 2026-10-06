@@ -1,4 +1,4 @@
-//! Host RPCs over the device-room relay (`zeron_rpc::LinkCache`: one cached,
+//! Host RPCs over the device-room relay (`paku_rpc::LinkCache`: one cached,
 //! self-evicting link per target device, dark-peer fast-fail, dial cooldown),
 //! plus the multi-call transfers built on it and the PR-status watches.
 
@@ -6,10 +6,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
+use paku_proto::CheckoutChangeRequestStatus;
+use paku_rpc::{LinkCache, LinkCacheConfig, PeerLiveness, RpcError, methods};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
-use zeron_proto::CheckoutChangeRequestStatus;
-use zeron_rpc::{LinkCache, LinkCacheConfig, PeerLiveness, RpcError, methods};
 
 use super::{Bearer, b64};
 use crate::client::ClientInner;

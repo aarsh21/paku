@@ -3,8 +3,8 @@ use gpui::{
     AppContext, AsyncApp, Bounds, Context, Entity, Render, Window, WindowBounds, WindowOptions,
     div, prelude::*, px, size,
 };
+use paku_ui::*;
 use std::{path::Path, path::PathBuf, time::Duration};
-use zeron_ui::*;
 
 struct Fixture {
     pickers: Entity<pickers::Pickers>,
@@ -203,7 +203,7 @@ fn main() -> anyhow::Result<()> {
                     pause(cx).await;
                     window.update(cx, |view, _, cx| {
                         let state = view.pickers.read(cx).fixture_compact_state(cx);
-                        assert_eq!(state.reasoning, Some(zeron_proto::ReasoningLevel::XHigh));
+                        assert_eq!(state.reasoning, Some(paku_proto::ReasoningLevel::XHigh));
                     })?;
                     capture(
                         window.into(),
@@ -236,7 +236,7 @@ fn main() -> anyhow::Result<()> {
                     window.update(cx, |view, _, cx| {
                         let state = view.pickers.read(cx).fixture_compact_state(cx);
                         assert!(state.model_list);
-                        assert_eq!(state.focused_model.as_deref(), Some("gpt-5.3-codex"));
+                        assert_eq!(state.focused_model.as_deref(), Some("openai/gpt-5.3-codex"));
                         assert!(state.focused_model_favorite);
                     })?;
                     capture(
@@ -250,7 +250,7 @@ fn main() -> anyhow::Result<()> {
                     pause(cx).await;
                     window.update(cx, |view, _, cx| {
                         let state = view.pickers.read(cx).fixture_compact_state(cx);
-                        assert_eq!(state.focused_model.as_deref(), Some("gpt-5.3-codex"));
+                        assert_eq!(state.focused_model.as_deref(), Some("openai/gpt-5.3-codex"));
                         assert!(!state.focused_model_favorite);
                     })?;
                     capture(
@@ -278,7 +278,7 @@ fn main() -> anyhow::Result<()> {
                     window.update(cx, |view, _, cx| {
                         let state = view.pickers.read(cx).fixture_compact_state(cx);
                         assert!(!state.fast);
-                        assert_eq!(state.reasoning, Some(zeron_proto::ReasoningLevel::Low));
+                        assert_eq!(state.reasoning, Some(paku_proto::ReasoningLevel::Low));
                     })?;
                     capture(
                         window.into(),
@@ -294,7 +294,7 @@ fn main() -> anyhow::Result<()> {
                     window.update(cx, |view, _, cx| {
                         let state = view.pickers.read(cx).fixture_compact_state(cx);
                         assert!(state.model_list);
-                        assert_eq!(state.focused_model.as_deref(), Some("gpt-5.3-codex"));
+                        assert_eq!(state.focused_model.as_deref(), Some("openai/gpt-5.3-codex"));
                         assert!(state.focused_model_favorite);
                     })?;
                     capture(

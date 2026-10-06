@@ -1,16 +1,14 @@
 //! Embedded icon assets + the gpui [`AssetSource`] that serves them.
 //!
-//! The set mirrors the original zeron's icon usage exactly:
+//! The set mirrors the original paku's icon usage exactly:
 //! - Most glyphs come from the **Solar Icons** set (Linear weight) by 480 Design,
 //!   the same set the Electron app used via `@solar-icons/react`. Solar Icons is
 //!   licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/);
 //!   attribution: "Solar Icons by 480 Design".
 //! - The terminal tab glyphs (`terminal`, `plus`, `close`) and the stop square
-//!   are ports of the hand-drawn inline SVGs in zeron's `terminal-panel.tsx` /
+//!   are ports of the hand-drawn inline SVGs in paku's `terminal-panel.tsx` /
 //!   `composer-actions.tsx`.
-//! - The harness brand marks (`claude-mark`, `openai-mark`, `cursor-mark`) are
-//!   ports of zeron's `icons.tsx`. gpui tints SVGs with the text color, so the
-//!   Claude mark's brand orange is applied at the call site ([`CLAUDE_BRAND`]).
+//! - The Pi harness brand mark is tinted with the surface's text color.
 //!
 //! Icons render via [`icon`]: `icon(icons::PAPERCLIP).size(px(16.)).text_color(…)`.
 
@@ -181,7 +179,7 @@ icon_assets![
     // plus/return ports) — the embedded set has neither.
     (BELL, "bell"),
     (VOLUME_LOUD, "volume-loud"),
-    // Hand-drawn zeron glyphs (terminal-panel.tsx / composer-actions.tsx /
+    // Hand-drawn paku glyphs (terminal-panel.tsx / composer-actions.tsx /
     // menu-check.tsx / logo.tsx).
     (TERMINAL, "terminal"),
     (CLOSE, "close"),
@@ -212,17 +210,8 @@ icon_assets![
     // favorited state and the picker's favorites rail tab.
     (STAR, "star"),
     (STAR_BOLD, "star-bold"),
-    (ZERON_LOGO, "zeron-logo"),
-    // Harness brand marks (icons.tsx).
-    (CLAUDE_MARK, "claude-mark"),
-    (OPENAI_MARK, "openai-mark"),
-    (CURSOR_MARK, "cursor-mark"),
-    (DEVIN_MARK, "devin-mark"),
-    (GROK_MARK, "grok-mark"),
-    (HERMES_MARK, "hermes-mark"),
+    (PAKU_LOGO, "paku-logo"),
     (PI_MARK, "pi-mark"),
-    (OPENCODE_MARK, "opencode-mark"),
-    (ANTIGRAVITY_MARK, "antigravity-mark"),
 ];
 
 /// Serves both the compact control-icon set and the complete file-identity
@@ -242,12 +231,6 @@ impl AssetSource for Assets {
         assets.extend(crate::file_icons::Assets.list(path)?);
         Ok(assets)
     }
-}
-
-/// The Claude mark's brand orange (`#D97757`) — zeron keeps it even on the
-/// monochrome surface.
-pub fn claude_brand() -> Hsla {
-    gpui::rgb(0xD97757).into()
 }
 
 /// An icon element for an embedded asset path. Size and colour are set by the

@@ -5,10 +5,10 @@
 //! continuation entries. An agent reading another chat wants prose plus a
 //! one-line record of what each tool did — never the raw part map.
 
+use paku_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
+use paku_proto::ToolCall;
 use serde::Serialize;
 use serde_json::{Value, json};
-use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
-use zeron_proto::ToolCall;
 
 #[derive(Debug, Clone, Copy)]
 pub struct RenderOptions {

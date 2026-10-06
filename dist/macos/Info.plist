@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Template for Zeron.app/Contents/Info.plist — see dist/README.md for the
+<!-- Template for Paku.app/Contents/Info.plist — see dist/README.md for the
      bundling steps. Replace __VERSION__ before packaging. -->
 <plist version="1.0">
 <dict>
@@ -9,17 +9,17 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleDisplayName</key>
-    <string>Zeron</string>
+    <string>Paku</string>
     <key>CFBundleExecutable</key>
-    <string>zeron</string>
+    <string>paku</string>
     <key>CFBundleIconFile</key>
-    <string>zeron.icns</string>
+    <string>paku.icns</string>
     <key>CFBundleIdentifier</key>
-    <string>sh.zeron.app</string>
+    <string>sh.paku.app</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>Zeron</string>
+    <string>Paku</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -30,10 +30,10 @@
     <array>
         <dict>
             <key>CFBundleURLName</key>
-            <string>sh.zeron.app.conversation</string>
+            <string>sh.paku.app.conversation</string>
             <key>CFBundleURLSchemes</key>
             <array>
-                <string>zeron</string>
+                <string>paku</string>
             </array>
         </dict>
     </array>

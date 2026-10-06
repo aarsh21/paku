@@ -2,7 +2,6 @@
 use crate::{HarnessError, ModelContext};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-use zeron_proto::HarnessId;
 
 pub(crate) fn root(variable: &str, fallback: PathBuf) -> PathBuf {
     std::env::var_os(variable)
@@ -11,73 +10,7 @@ pub(crate) fn root(variable: &str, fallback: PathBuf) -> PathBuf {
         .unwrap_or(fallback)
 }
 
-pub(crate) fn context(
-    id: HarnessId,
-    binary: &Path,
-    extra: &[PathBuf],
-) -> Result<ModelContext, HarnessError> {
-    let home = crate::executable::home_or_current_dir();
-    let files = match id {
-        HarnessId::Codex => vec![root("CODEX_HOME", home.join(".codex")).join("auth.json")],
-        HarnessId::ClaudeCode => {
-            let root = root("CLAUDE_CONFIG_DIR", home.join(".claude"));
-            vec![root.join("settings.json"), root.join(".credentials.json")]
-        }
-        HarnessId::Cursor => vec![home.join(".cursor/sdk/auth.json")],
-        HarnessId::Opencode => {
-            let data = root("XDG_DATA_HOME", home.join(".local/share"));
-            let config = root("XDG_CONFIG_HOME", home.join(".config"));
-            let cwd = std::env::current_dir()?;
-            let mut files = vec![
-                data.join("opencode/auth.json"),
-                config.join("opencode/opencode.json"),
-                config.join("opencode/opencode.jsonc"),
-            ];
-            for dir in cwd.ancestors() {
-                for name in [
-                    "opencode.json",
-                    "opencode.jsonc",
-                    ".opencode/opencode.json",
-                    ".opencode/opencode.jsonc",
-                ] {
-                    files.push(dir.join(name));
-                }
-            }
-            if let Some(path) = std::env::var_os("OPENCODE_CONFIG") {
-                files.push(path.into());
-            }
-            files
-        }
-        HarnessId::Grok => {
-            let root = root("GROK_HOME", home.join(".grok"));
-            vec![root.join("auth.json"), root.join("config.toml")]
-        }
-        HarnessId::Hermes => {
-            let root = root("HERMES_HOME", home.join(".hermes"));
-            vec![
-                root.join("auth.json"),
-                root.join(".env"),
-                root.join("config.yaml"),
-            ]
-        }
-        HarnessId::Pi => {
-            vec![root("PI_CODING_AGENT_DIR", home.join(".pi/agent")).join("auth.json")]
-        }
-        HarnessId::Devin => {
-            let data = root("XDG_DATA_HOME", home.join(".local/share"));
-            let mut files = vec![data.join("devin/credentials.toml")];
-            if cfg!(target_os = "macos") {
-                files.push(home.join("Library/Application Support/devin/credentials.toml"));
-            }
-            if cfg!(windows) {
-                files.push(
-                    root("APPDATA", home.join("AppData/Roaming")).join("devin/credentials.toml"),
-                );
-            }
-            files
-        }
-        _ => vec![],
-    };
+pub(crate) fn context(binary: &Path, files: &[PathBuf]) -> Result<ModelContext, HarnessError> {
     let binary = binary
         .canonicalize()
         .unwrap_or_else(|_| binary.to_path_buf());
@@ -95,26 +28,11 @@ pub(crate) fn context(
             format!("{:?}:{}", metadata.modified().ok(), metadata.len()).as_bytes(),
         );
     }
-    hash_files(&mut hash, files.iter().chain(extra))?;
-    let prefixes: &[&str] = match id {
-        HarnessId::Codex => &["CODEX_", "OPENAI_"],
-        HarnessId::ClaudeCode => &["CLAUDE_", "ANTHROPIC_", "AWS_"],
-        HarnessId::Opencode => &["OPENCODE_", "OPENAI_", "ANTHROPIC_", "GOOGLE_"],
-        HarnessId::Grok => &["GROK_", "XAI_"],
-        HarnessId::Hermes => &["HERMES_", "OPENAI_", "ANTHROPIC_"],
-        HarnessId::Pi => &["PI_", "OPENAI_", "ANTHROPIC_"],
-        HarnessId::Devin => &["DEVIN_"],
-        HarnessId::Antigravity => &["GEMINI_", "GOOGLE_"],
-        HarnessId::Cursor => &["CURSOR_"],
-        _ => &[],
-    };
-    let mut env: Vec<_> = std::env::vars_os()
-        .filter(|(key, _)| {
-            prefixes
-                .iter()
-                .any(|prefix| key.to_string_lossy().starts_with(prefix))
-        })
-        .collect();
+    hash_files(&mut hash, files.iter())?;
+    // Pi's built-in and custom model providers may resolve credentials from
+    // arbitrary environment variables. Hash (never log) the environment rather
+    // than maintaining an app-harness-specific provider allowlist.
+    let mut env: Vec<_> = std::env::vars_os().collect();
     env.sort();
     for (key, value) in env {
         field(&mut hash, key.as_encoded_bytes());
@@ -152,9 +70,6 @@ fn hash_files<'a>(
 impl ModelContext {
     pub(crate) fn key(&self) -> [u8; 32] {
         Sha256::digest(self.hash.as_bytes()).into()
-    }
-    pub(crate) fn log(&self) {
-        tracing::info!(binary_path = %self.binary_path.display(), binary_version = self.binary_version.as_deref().unwrap_or("unknown"), "Model discovery binary");
     }
 }
 

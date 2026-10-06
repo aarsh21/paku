@@ -3,12 +3,12 @@
 use std::path::Path;
 use std::sync::{Arc, Barrier, Mutex};
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
-use zeron_engine::{
+use paku_engine::{
     AuthState, Engine, EngineConfig, EngineCore, EngineProfile, HarnessId, WorkspaceScope,
     default_registry,
 };
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 
 fn config(
     data_dir: &Path,
@@ -57,6 +57,38 @@ fn concurrent_engine_info(
         .into_iter()
         .map(|call| call.join().expect("engine-info worker"))
         .collect()
+}
+
+#[tokio::test]
+async fn unconfigured_paku_boots_local_without_a_synthetic_dev_account() {
+    for partial_client in [None, Some("client_partial")] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(dir.path(), String::new(), partial_client, None);
+        let auth = Engine::build_auth(&config).await;
+        assert_eq!(auth.state(), AuthState::SignedOut);
+        assert_eq!(auth.user_id(), None);
+        assert!(matches!(
+            auth.access_token().await,
+            Err(paku_rpc::TokenError::SignedOut)
+        ));
+        assert!(
+            auth.start_sign_in()
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("not configured")
+        );
+        let scope = Engine::initial_workspace_scope(&auth);
+        assert_eq!(scope, WorkspaceScope::Local);
+        let profile = Engine::resolve_profile(&config, &auth, scope)
+            .unwrap()
+            .unwrap();
+        let runtime = Engine::assemble_runtime(&config, auth, profile)
+            .await
+            .unwrap();
+        assert_eq!(runtime.workspace_scope(), WorkspaceScope::Local);
+        runtime.shutdown().await;
+    }
 }
 
 #[tokio::test]

@@ -36,8 +36,8 @@ pub enum ClientError {
     Internal(String),
 }
 
-impl From<zeron_doc::DocError> for ClientError {
-    fn from(err: zeron_doc::DocError) -> Self {
+impl From<paku_doc::DocError> for ClientError {
+    fn from(err: paku_doc::DocError) -> Self {
         ClientError::Internal(err.to_string())
     }
 }

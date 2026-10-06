@@ -38,14 +38,14 @@ pub(crate) trait Transcriber {
 
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
-    fn zeron_microphone_permission() -> i32;
-    fn zeron_request_microphone();
-    fn zeron_microphone_window() -> usize;
+    fn paku_microphone_permission() -> i32;
+    fn paku_request_microphone();
+    fn paku_microphone_window() -> usize;
 }
 fn permission() -> i32 {
     #[cfg(target_os = "macos")]
     {
-        unsafe { zeron_microphone_permission() }
+        unsafe { paku_microphone_permission() }
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -58,7 +58,7 @@ pub(crate) fn permission_pending() -> bool {
 fn origin_window() -> usize {
     #[cfg(target_os = "macos")]
     {
-        unsafe { zeron_microphone_window() }
+        unsafe { paku_microphone_window() }
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -70,7 +70,7 @@ struct Native {
     origin_window: usize,
     dir: std::path::PathBuf,
     device: Option<String>,
-    session: Option<zeron_voice::Session>,
+    session: Option<paku_voice::Session>,
     finished: bool,
 }
 impl Transcriber for Native {
@@ -87,18 +87,18 @@ impl Transcriber for Native {
                 -2 => {
                     self.finished = true;
                     return Some(Event::Unavailable(
-                        "Dictation requires the packaged Zeron app.".into(),
+                        "Dictation requires the packaged Paku app.".into(),
                     ));
                 }
                 -1 => {
                     self.finished = true;
-                    return Some(Event::Denied("Allow Microphone access for Zeron in System Settings → Privacy & Security, then retry.".into()));
+                    return Some(Event::Denied("Allow Microphone access for Paku in System Settings → Privacy & Security, then retry.".into()));
                 }
                 _ if self.origin_window == 0 || origin_window() != self.origin_window => {
                     self.finished = true;
                     return Some(Event::Cancelled);
                 }
-                _ => match zeron_voice::Session::start(self.dir.clone(), self.device.clone()) {
+                _ => match paku_voice::Session::start(self.dir.clone(), self.device.clone()) {
                     Ok(s) => self.session = Some(s),
                     Err(e) => {
                         self.finished = true;
@@ -108,10 +108,10 @@ impl Transcriber for Native {
             }
         }
         self.session.as_mut()?.poll().map(|event| match event {
-            zeron_voice::Event::Listening => Event::Listening,
-            zeron_voice::Event::Finalizing => Event::Finalizing,
-            zeron_voice::Event::Final(t) => Event::Final(t),
-            zeron_voice::Event::Failed(e) => Event::Failed(e),
+            paku_voice::Event::Listening => Event::Listening,
+            paku_voice::Event::Finalizing => Event::Finalizing,
+            paku_voice::Event::Final(t) => Event::Final(t),
+            paku_voice::Event::Failed(e) => Event::Failed(e),
         })
     }
     fn level(&mut self) -> f32 {
@@ -134,7 +134,7 @@ pub(crate) fn start(cx: &gpui::App) -> Option<Box<dyn Transcriber>> {
     #[cfg(target_os = "macos")]
     if permission() == 0 {
         unsafe {
-            zeron_request_microphone();
+            paku_request_microphone();
         }
     }
     Some(Box::new(Native {

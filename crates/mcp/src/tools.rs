@@ -1,7 +1,7 @@
 //! The tool catalog and its dispatch.
 //!
 //! Every tool is a thin composition of engine reads/writes from
-//! [`Zeron`]; the only logic that lives here is argument resolution (chat
+//! [`Paku`]; the only logic that lives here is argument resolution (chat
 //! by prefix, project by path), sender attribution, and the "how do I
 //! deliver a message to a chat in this state" choice the composer makes
 //! for humans.
@@ -11,16 +11,16 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use zeron_doc::SessionCommandPayload;
-use zeron_proto::{
+use paku_doc::SessionCommandPayload;
+use paku_proto::{
     Chat, ChatConfig, HarnessId, ReasoningLevel, RunRequest, SandboxLevel, Session, SessionStatus,
     Space, UserInputAnswer,
 };
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
+use crate::paku::{HarnessInfo, Paku, TurnOutcome, session_for, short};
 use crate::transcript::{RenderOptions, RenderedMessage, render_entries};
-use crate::zeron::{HarnessInfo, TurnOutcome, Zeron, session_for, short};
 
 /// Default and ceiling for the blocking waits.
 const MAX_BATCH: usize = 32;
@@ -39,7 +39,7 @@ pub struct ToolDef {
 }
 
 pub struct Tools {
-    zeron: Arc<Zeron>,
+    paku: Arc<Paku>,
     // Remember successful sends on this MCP connection so wait_for_turn after
     // wait:false also waits for a newly created chat with no session row yet.
     pending_turns: tokio::sync::Mutex<HashMap<String, Arc<PendingTurn>>>,
@@ -83,7 +83,7 @@ fn catalog() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "list_harnesses",
-            description: "Agent harnesses (claude-code, codex, cursor, …) available on the chosen device. Omit device for the local engine.",
+            description: "Pi availability and capabilities on the chosen device. Pi is the only production harness. Omit device for the local engine.",
             input_schema: json!({ "type": "object", "properties": { "device": device_schema() } }),
         },
         ToolDef {
@@ -92,7 +92,7 @@ fn catalog() -> Vec<ToolDef> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "harness": { "type": "string", "description": "Harness id, e.g. claude-code or codex." },
+                    "harness": { "type": "string", "description": "Harness id: pi. Legacy harness ids are unsupported." },
                     "device": device_schema()
                 },
                 "required": ["harness"]
@@ -127,7 +127,7 @@ fn catalog() -> Vec<ToolDef> {
                     "project": { "type": "string", "description": "Project id, path, or name. Belongs to a specific device; when device is supplied, search only there. Optional." },
                     "device": { "type": "string", "description": "Host device (id or name). With project, it must own that project. Without either, use the local engine." },
                     "parent": { "type": "string", "description": "Parent chat to record (id, prefix, or title). Defaults to the chat you are speaking from." },
-                    "harness": { "type": "string", "description": "Harness id (see list_harnesses with the chosen device). Defaults to claude-code when available." },
+                    "harness": { "type": "string", "description": "Harness id: pi (see list_harnesses on the chosen device). Defaults to Pi when available; legacy ids are rejected." },
                     "model": { "type": "string", "description": "Model id from list_models on the chosen device. Omit for the harness default." },
                     "reasoning": { "type": "string", "description": "Reasoning level the model supports (e.g. low, medium, high, max)." },
                     "sandbox": { "type": "string", "enum": ["read-only", "workspace-write", "danger-full-access"], "default": "workspace-write" },
@@ -428,9 +428,9 @@ fn last_pending_input(messages: &[RenderedMessage]) -> Option<Value> {
 // ---- dispatch ----------------------------------------------------------------
 
 impl Tools {
-    pub fn new(zeron: Arc<Zeron>) -> Self {
+    pub fn new(paku: Arc<Paku>) -> Self {
         Self {
-            zeron,
+            paku,
             pending_turns: Default::default(),
         }
     }
@@ -501,14 +501,14 @@ impl Tools {
     }
 
     async fn whoami(&self) -> anyhow::Result<Value> {
-        let origin = self.zeron.origin().clone();
-        let local_device = self.zeron.local_device_id().await?;
-        let engine = self.zeron.engine_info().await.unwrap_or(Value::Null);
+        let origin = self.paku.origin().clone();
+        let local_device = self.paku.local_device_id().await?;
+        let engine = self.paku.engine_info().await.unwrap_or(Value::Null);
         let chat = match origin.chat_id.as_deref() {
-            Some(id) => match self.zeron.resolve_chat(id).await {
+            Some(id) => match self.paku.resolve_chat(id).await {
                 Ok(chat) => {
                     let (spaces, sessions) =
-                        tokio::try_join!(self.zeron.spaces(), self.zeron.sessions())?;
+                        tokio::try_join!(self.paku.spaces(), self.paku.sessions())?;
                     summarize_chat(&chat, &spaces, &sessions)
                 }
                 Err(_) => json!({ "id": id }),
@@ -529,8 +529,7 @@ impl Tools {
     }
 
     async fn list_devices(&self) -> anyhow::Result<Value> {
-        let (devices, local) =
-            tokio::try_join!(self.zeron.devices(), self.zeron.local_device_id())?;
+        let (devices, local) = tokio::try_join!(self.paku.devices(), self.paku.local_device_id())?;
         Ok(json!({
             "devices": devices.iter().map(|d| json!({
                 "id": d.id,
@@ -544,9 +543,9 @@ impl Tools {
     }
 
     async fn list_projects(&self, args: DeviceArgs) -> anyhow::Result<Value> {
-        let (mut spaces, devices) = tokio::try_join!(self.zeron.spaces(), self.zeron.devices())?;
+        let (mut spaces, devices) = tokio::try_join!(self.paku.spaces(), self.paku.devices())?;
         if let Some(device) = args.device.as_deref() {
-            let device = self.zeron.resolve_device_id(Some(device)).await?;
+            let device = self.paku.resolve_device_id(Some(device)).await?;
             spaces.retain(|s| s.device_id == device);
         }
         let device_name = |id: &str| devices.iter().find(|d| d.id == id).map(|d| d.name.clone());
@@ -564,10 +563,10 @@ impl Tools {
 
     async fn list_harnesses(&self, args: DeviceArgs) -> anyhow::Result<Value> {
         let device = match args.device.as_deref() {
-            Some(key) => Some(self.zeron.resolve_device_id(Some(key)).await?),
+            Some(key) => Some(self.paku.resolve_device_id(Some(key)).await?),
             None => None,
         };
-        let harnesses = self.zeron.harnesses_on(device.as_deref()).await?;
+        let harnesses = self.paku.harnesses_on(device.as_deref()).await?;
         Ok(json!({
             "harnesses": harnesses.iter().map(|h| json!({
                 "id": h.id,
@@ -584,10 +583,10 @@ impl Tools {
         let harness: HarnessId =
             parse_enum("harness", &args.harness).map_err(anyhow::Error::msg)?;
         let device = match args.device.as_deref() {
-            Some(key) => Some(self.zeron.resolve_device_id(Some(key)).await?),
+            Some(key) => Some(self.paku.resolve_device_id(Some(key)).await?),
             None => None,
         };
-        let models = self.zeron.models_on(harness, device.as_deref()).await?;
+        let models = self.paku.models_on(harness, device.as_deref()).await?;
         Ok(json!({
             "harness": harness,
             "models": models.iter().map(|m| json!({
@@ -600,28 +599,25 @@ impl Tools {
     }
 
     async fn list_chats(&self, args: ListChatsArgs) -> anyhow::Result<Value> {
-        let (mut chats, spaces, sessions) = tokio::try_join!(
-            self.zeron.chats(),
-            self.zeron.spaces(),
-            self.zeron.sessions()
-        )?;
+        let (mut chats, spaces, sessions) =
+            tokio::try_join!(self.paku.chats(), self.paku.spaces(), self.paku.sessions())?;
         if let Some(project) = args.project.as_deref() {
             let (space, _) = self
-                .zeron
+                .paku
                 .resolve_target(Some(project), args.device.as_deref())
                 .await?;
             let space = space.expect("project provided");
             chats.retain(|c| c.space_id.as_deref() == Some(space.id.as_str()));
         }
         if args.device.is_some() {
-            let device = self.zeron.resolve_device_id(args.device.as_deref()).await?;
+            let device = self.paku.resolve_device_id(args.device.as_deref()).await?;
             chats.retain(|c| c.device_id == device);
         }
         if !args.include_archived {
             chats.retain(|c| !c.archived);
         }
         if let Some(parent) = args.parent.as_deref() {
-            let parent = self.zeron.resolve_chat(parent).await?;
+            let parent = self.paku.resolve_chat(parent).await?;
             chats.retain(|c| c.parent_chat_id.as_deref() == Some(parent.id.as_str()));
         }
         chats.sort_by(|a, b| {
@@ -640,11 +636,11 @@ impl Tools {
     }
 
     async fn get_chat(&self, args: ChatArgs) -> anyhow::Result<Value> {
-        let chat = self.zeron.resolve_chat(&args.chat).await?;
+        let chat = self.paku.resolve_chat(&args.chat).await?;
         let (spaces, sessions, entries) = tokio::try_join!(
-            self.zeron.spaces(),
-            self.zeron.sessions(),
-            self.zeron.transcript_on(&chat.id, Some(&chat.device_id))
+            self.paku.spaces(),
+            self.paku.sessions(),
+            self.paku.transcript_on(&chat.id, Some(&chat.device_id))
         )?;
         let rendered = render_entries(&entries, RenderOptions::default());
         let mut summary = summarize_chat(&chat, &spaces, &sessions);
@@ -655,8 +651,8 @@ impl Tools {
     }
 
     async fn create_chat(&self, args: CreateChatArgs) -> anyhow::Result<Value> {
-        if let Some(origin) = self.zeron.origin().chat_id.as_deref() {
-            let chat = self.zeron.resolve_chat(origin).await?;
+        if let Some(origin) = self.paku.origin().chat_id.as_deref() {
+            let chat = self.paku.resolve_chat(origin).await?;
             anyhow::ensure!(
                 chat.parent_chat_id.is_none(),
                 "Side chats cannot create chats. Ask your parent chat to create another side chat."
@@ -677,8 +673,8 @@ impl Tools {
             None
         } else {
             match explicit_parent {
-                Some(key) => Some(self.zeron.resolve_chat(key).await?.id),
-                None => self.zeron.origin().chat_id.clone(),
+                Some(key) => Some(self.paku.resolve_chat(key).await?.id),
+                None => self.paku.origin().chat_id.clone(),
             }
         };
         anyhow::ensure!(
@@ -692,17 +688,17 @@ impl Tools {
         };
 
         if let Some(parent) = parent_chat_id.as_deref() {
-            let chat = self.zeron.resolve_chat(parent).await?;
+            let chat = self.paku.resolve_chat(parent).await?;
             anyhow::ensure!(
                 chat.parent_chat_id.is_none(),
                 "Cannot create a child of a side chat. Choose a top-level parent chat."
             );
         }
         let (space, device_id) = self
-            .zeron
+            .paku
             .resolve_target(args.project.as_deref(), args.device.as_deref())
             .await?;
-        let harnesses = self.zeron.harnesses_on(Some(&device_id)).await?;
+        let harnesses = self.paku.harnesses_on(Some(&device_id)).await?;
         let harness = match args.harness.as_deref() {
             Some(raw) => {
                 let id: HarnessId = parse_enum("harness", raw).map_err(anyhow::Error::msg)?;
@@ -715,7 +711,7 @@ impl Tools {
             None => default_harness(&harnesses).with_context(|| format!("device {device_id}"))?,
         };
         if let Some(model) = args.model.as_deref() {
-            let models = self.zeron.models_on(harness, Some(&device_id)).await?;
+            let models = self.paku.models_on(harness, Some(&device_id)).await?;
             anyhow::ensure!(
                 models.iter().any(|m| m.id == model),
                 "model {model:?} is not offered by {harness:?} on device {device_id}; available: {}",
@@ -766,14 +762,14 @@ impl Tools {
         if let Some(cwd) = args.cwd.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
             mutate["cwd"] = json!(cwd);
         }
-        self.zeron.mutate(mutate).await?;
+        self.paku.mutate(mutate).await?;
         if let Some(title) = args
             .title
             .as_deref()
             .map(str::trim)
             .filter(|t| !t.is_empty())
         {
-            self.zeron
+            self.paku
                 .mutate(json!({ "op": "renameChat", "chatId": chat_id, "title": title }))
                 .await?;
         }
@@ -835,9 +831,9 @@ impl Tools {
     }
 
     async fn read_chat(&self, args: ReadChatArgs) -> anyhow::Result<Value> {
-        let chat = self.zeron.resolve_chat(&args.chat).await?;
+        let chat = self.paku.resolve_chat(&args.chat).await?;
         let entries = self
-            .zeron
+            .paku
             .transcript_on(&chat.id, Some(&chat.device_id))
             .await?;
         let rendered = render_entries(
@@ -869,17 +865,17 @@ impl Tools {
         if text.is_empty() {
             anyhow::bail!("text is empty");
         }
-        let chat = self.zeron.resolve_chat(&args.chat).await?;
-        if self.zeron.origin().chat_id.as_deref() == Some(chat.id.as_str()) {
+        let chat = self.paku.resolve_chat(&args.chat).await?;
+        if self.paku.origin().chat_id.as_deref() == Some(chat.id.as_str()) {
             anyhow::bail!(
                 "refusing to send a message to your own chat ({})",
                 short(&chat.id)
             );
         }
         let (spaces, sessions, harnesses) = tokio::try_join!(
-            self.zeron.spaces(),
-            self.zeron.sessions(),
-            self.zeron.harnesses_on(Some(&chat.device_id))
+            self.paku.spaces(),
+            self.paku.sessions(),
+            self.paku.harnesses_on(Some(&chat.device_id))
         )?;
         let space = chat
             .space_id
@@ -888,7 +884,7 @@ impl Tools {
         let baseline = session_for(&sessions, &chat);
         let mode = args.mode.as_deref().unwrap_or("auto");
         let message_ids = self
-            .zeron
+            .paku
             .transcript_on(&chat.id, Some(&chat.device_id))
             .await?
             .into_iter()
@@ -919,7 +915,7 @@ impl Tools {
     }
 
     async fn wait_for_turn(&self, args: WaitArgs) -> anyhow::Result<Value> {
-        let chat = self.zeron.resolve_chat(&args.chat).await?;
+        let chat = self.paku.resolve_chat(&args.chat).await?;
         let pending = self.pending_turns.lock().await.get(&chat.id).cloned();
         let turn = match pending {
             Some(pending) => {
@@ -941,30 +937,30 @@ impl Tools {
     }
 
     async fn archive_chat(&self, args: ArchiveArgs) -> anyhow::Result<Value> {
-        let chat = self.zeron.resolve_chat(&args.chat).await?;
+        let chat = self.paku.resolve_chat(&args.chat).await?;
         let archived = args.archived.unwrap_or(true);
-        self.zeron
+        self.paku
             .mutate(json!({ "op": "setChatArchived", "chatId": chat.id, "archived": archived }))
             .await?;
         Ok(json!({ "chatId": chat.id, "title": chat.title, "archived": archived }))
     }
 
     async fn interrupt_chat(&self, args: ChatArgs) -> anyhow::Result<Value> {
-        let chat = self.zeron.resolve_chat(&args.chat).await?;
+        let chat = self.paku.resolve_chat(&args.chat).await?;
         let command_id = self
-            .zeron
+            .paku
             .queue_command(&chat.id, &SessionCommandPayload::Interrupt {})
             .await?;
         Ok(json!({ "chatId": chat.id, "commandId": command_id }))
     }
 
     async fn respond_to_input(&self, args: RespondArgs) -> anyhow::Result<Value> {
-        let chat = self.zeron.resolve_chat(&args.chat).await?;
+        let chat = self.paku.resolve_chat(&args.chat).await?;
         let request_id = match args.request_id {
             Some(id) => id,
             None => {
                 let entries = self
-                    .zeron
+                    .paku
                     .transcript_on(&chat.id, Some(&chat.device_id))
                     .await?;
                 let rendered = render_entries(&entries, RenderOptions::default());
@@ -991,7 +987,7 @@ impl Tools {
             })
             .collect();
         let command_id = self
-            .zeron
+            .paku
             .queue_command(
                 &chat.id,
                 &SessionCommandPayload::RespondInput {
@@ -1009,13 +1005,13 @@ impl Tools {
     /// the receiving agent (and the human reading that transcript) can tell
     /// an agent-to-agent message from a typed one.
     async fn attribute(&self, target: &Chat, text: &str) -> String {
-        let Some(origin_id) = self.zeron.origin().chat_id.as_deref() else {
+        let Some(origin_id) = self.paku.origin().chat_id.as_deref() else {
             return text.to_owned();
         };
         if origin_id == target.id {
             return text.to_owned();
         }
-        let title = match self.zeron.resolve_chat(origin_id).await {
+        let title = match self.paku.resolve_chat(origin_id).await {
             Ok(chat) => chat.title,
             Err(_) => None,
         };
@@ -1026,7 +1022,7 @@ impl Tools {
             _ => short(origin_id).to_owned(),
         };
         format!(
-            "[Message from Zeron chat {label}. Reply to it with the Zeron `send_message` tool, chat {}.]\n\n{text}",
+            "[Message from Paku chat {label}. Reply to it with the Paku `send_message` tool, chat {}.]\n\n{text}",
             short(origin_id)
         )
     }
@@ -1090,7 +1086,7 @@ impl Tools {
                     attachments: Vec::new(),
                     worktree: None,
                 };
-                self.zeron
+                self.paku
                     .queue_command(
                         &chat.id,
                         &SessionCommandPayload::Run {
@@ -1101,7 +1097,7 @@ impl Tools {
                     .await?
             }
             "steer" => {
-                self.zeron
+                self.paku
                     .queue_command(
                         &chat.id,
                         &SessionCommandPayload::Steer {
@@ -1111,7 +1107,7 @@ impl Tools {
                     )
                     .await?
             }
-            _ => self.zeron.queue_message(&chat.id, &text).await?,
+            _ => self.paku.queue_message(&chat.id, &text).await?,
         };
         Ok(json!({
             "delivery": chosen,
@@ -1160,7 +1156,7 @@ impl Tools {
     ) -> anyhow::Result<Value> {
         let deadline = Instant::now() + timeout;
         let (mut outcome, session) = self
-            .zeron
+            .paku
             .wait_for_turn(chat, baseline, expect_turn, timeout)
             .await?;
         // Registry session updates can arrive before the separate transcript doc.
@@ -1177,7 +1173,7 @@ impl Tools {
             }
             let entries = match tokio::time::timeout(
                 remaining,
-                self.zeron.transcript_on(&chat.id, Some(&chat.device_id)),
+                self.paku.transcript_on(&chat.id, Some(&chat.device_id)),
             )
             .await
             {
@@ -1190,7 +1186,7 @@ impl Tools {
             rendered = render_entries(&entries, RenderOptions::default());
             replies = rendered
                 .iter()
-                .filter(|m| m.role == zeron_doc::MessageRole::Assistant)
+                .filter(|m| m.role == paku_doc::MessageRole::Assistant)
                 .filter(|m| !start.message_ids.contains(&m.id))
                 .cloned()
                 .collect();
@@ -1198,7 +1194,7 @@ impl Tools {
                 || outcome != TurnOutcome::Completed
                 || replies
                     .iter()
-                    .any(|m| m.status != Some(zeron_doc::MessageStatus::Streaming))
+                    .any(|m| m.status != Some(paku_doc::MessageStatus::Streaming))
             {
                 break;
             }
@@ -1215,30 +1211,23 @@ impl Tools {
     }
 }
 
-/// claude-code when it is offered here, else the first available harness.
+/// Only Pi can be selected implicitly; Mock is explicitly test-only.
 fn default_harness(harnesses: &[HarnessInfo]) -> anyhow::Result<HarnessId> {
     harnesses
         .iter()
-        .find(|h| h.id == HarnessId::ClaudeCode && h.available())
-        .or_else(|| {
-            harnesses
-                .iter()
-                .find(|h| h.available() && h.id != HarnessId::Mock)
-        })
+        .find(|h| h.id == HarnessId::Pi && h.available())
         .map(|h| h.id)
-        .ok_or_else(|| {
-            anyhow::anyhow!("no harness is available on this device (see list_harnesses)")
-        })
+        .ok_or_else(|| anyhow::anyhow!("Pi is not available on this device (see list_harnesses)"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::zeron::Origin;
+    use crate::paku::Origin;
     use async_trait::async_trait;
     use futures::StreamExt;
+    use paku_rpc::{RpcError, RpcReply, RpcService, memory_client, methods};
     use std::sync::Mutex;
-    use zeron_rpc::{RpcError, RpcReply, RpcService, memory_client, methods};
 
     /// Two devices with distinct catalogs and repeated project paths, plus
     /// two chats with a two-message transcript. Writes are recorded for assertions.
@@ -1292,7 +1281,7 @@ mod tests {
                     {
                         "id": "chat-alpha-1", "deviceId": "dev-local", "title": "Alpha",
                         "archived": false, "spaceId": "space-1",
-                        "config": { "harness": "claude-code", "model": "opus", "reasoning": null, "sandbox": "workspace-write" },
+                        "config": { "harness": "pi", "model": "anthropic/opus", "reasoning": null, "sandbox": "workspace-write" },
                         "createdAt": "2026-09-01T00:00:00Z"
                     },
                     {
@@ -1304,20 +1293,17 @@ mod tests {
                 ])),
                 methods::WATCH_SESSIONS => stream(json!([])),
                 methods::LIST_HARNESSES if remote => RpcReply::Value(json!([
-                    {"id":"codex", "name":"Remote Codex", "installed":true},
-                    {"id":"cursor", "name":"Disabled Cursor", "installed":true, "enabled":false}
+                    {"id":"pi", "name":"Pi", "supportsSteering":true, "steeringMode":"step-boundary", "installed":true, "enabled":true}
                 ])),
                 methods::LIST_HARNESSES => RpcReply::Value(json!([
-                    { "id": "claude-code", "name": "Claude Code", "supportsSteering": true,
-                      "steeringMode": "step-boundary", "reasoningLevels": [], "installed": true, "enabled": true },
-                    { "id": "codex", "name": "Codex", "supportsSteering": true,
-                      "steeringMode": "turn-boundary", "reasoningLevels": [], "installed": false, "enabled": true }
+                    { "id": "pi", "name": "Pi", "supportsSteering": true,
+                      "steeringMode": "step-boundary", "reasoningLevels": [], "installed": true, "enabled": true }
                 ])),
                 methods::LIST_MODELS if remote => RpcReply::Value(json!([
-                    {"id":"remote-model", "label":"Remote model"}
+                    {"id":"openai/remote-model", "label":"Remote model"}
                 ])),
                 methods::LIST_MODELS => RpcReply::Value(json!([
-                    { "id": "opus", "label": "Opus" }, { "id": "sonnet", "label": "Sonnet" }
+                    { "id": "anthropic/opus", "label": "Opus" }, { "id": "anthropic/sonnet", "label": "Sonnet" }
                 ])),
                 methods::WATCH_DOC_MESSAGES => stream(json!({ "reset": [
                     { "id": "u1", "role": "user", "createdAt": 1, "deviceId": "dev-local",
@@ -1347,7 +1333,7 @@ mod tests {
 
     fn tools(world: Arc<World>, origin: Origin) -> Tools {
         let client = memory_client(world);
-        Tools::new(Arc::new(Zeron::with_client(client, origin)))
+        Tools::new(Arc::new(Paku::with_client(client, origin)))
     }
 
     #[tokio::test]
@@ -1421,20 +1407,20 @@ mod tests {
         assert_eq!(params["command"]["kind"], "run");
         let prompt = params["command"]["request"]["prompt"].as_str().unwrap();
         assert!(
-            prompt.starts_with("[Message from Zeron chat Beta (chat-bet)"),
+            prompt.starts_with("[Message from Paku chat Beta (chat-bet)"),
             "{prompt}"
         );
         assert!(prompt.ends_with("please review"));
         assert_eq!(params["command"]["request"]["cwd"], "/repo/comet");
-        assert_eq!(params["command"]["request"]["harness"], "claude-code");
-        assert_eq!(params["command"]["request"]["model"], "opus");
+        assert_eq!(params["command"]["request"]["harness"], "pi");
+        assert_eq!(params["command"]["request"]["model"], "anthropic/opus");
     }
 
     #[tokio::test]
     async fn auto_steers_busy_chats_even_at_turn_boundaries_or_after_long_quiet_tools() {
         let world = Arc::new(World::default());
         let tools = tools(world.clone(), Origin::default());
-        let chats = tools.zeron.chats().await.unwrap();
+        let chats = tools.paku.chats().await.unwrap();
         let session = Session {
             chat_id: chats[0].id.clone(),
             device_id: "dev-local".into(),
@@ -1478,7 +1464,7 @@ mod tests {
         let created = tools
             .call(
                 "create_chat",
-                json!({ "project": "space-1", "model": "sonnet", "title": "Review", "prompt": "go" }),
+                json!({ "project": "space-1", "model": "anthropic/sonnet", "title": "Review", "prompt": "go" }),
             )
             .await
             .unwrap();
@@ -1492,8 +1478,8 @@ mod tests {
             writes[0].1.get("parentChatId").is_none(),
             "no origin, no parent"
         );
-        assert_eq!(writes[0].1["config"]["harness"], "claude-code");
-        assert_eq!(writes[0].1["config"]["model"], "sonnet");
+        assert_eq!(writes[0].1["config"]["harness"], "pi");
+        assert_eq!(writes[0].1["config"]["model"], "anthropic/sonnet");
         assert_eq!(writes[1].1["op"], "renameChat");
         assert_eq!(writes[2].0, methods::QUEUE_COMMAND);
         assert_eq!(writes[2].1["command"]["request"]["prompt"], "go");
@@ -1765,7 +1751,7 @@ mod tests {
                 .unwrap();
             assert_eq!(created["deviceId"], "dev-remote");
             assert_eq!(created["project"]["id"], "space-remote");
-            assert_eq!(created["harness"], "codex");
+            assert_eq!(created["harness"], "pi");
         }
         let created = tools
             .call("create_chat", json!({"project":"unique"}))
@@ -1807,35 +1793,35 @@ mod tests {
         );
         assert_eq!(
             tools.call("list_harnesses", json!({})).await.unwrap()["harnesses"][0]["id"],
-            "claude-code"
+            "pi"
         );
         assert_eq!(
             tools
                 .call("list_harnesses", json!({"device":"Worker"}))
                 .await
                 .unwrap()["harnesses"][0]["id"],
-            "codex"
+            "pi"
         );
         assert_eq!(
             tools
-                .call("list_models", json!({"harness":"codex", "device":"Worker"}))
+                .call("list_models", json!({"harness":"pi", "device":"Worker"}))
                 .await
                 .unwrap()["models"][0]["id"],
-            "remote-model"
+            "openai/remote-model"
         );
         assert_eq!(
             tools
-                .call("list_models", json!({"harness":"claude-code"}))
+                .call("list_models", json!({"harness":"pi"}))
                 .await
                 .unwrap()["models"][0]["id"],
-            "opus"
+            "anthropic/opus"
         );
+        // Both devices run Pi, but one device's models are not available on
+        // the other. This must not be reduced to testing different harness ids.
         for args in [
-            json!({"device":"Worker", "harness":"claude-code"}),
-            json!({"device":"Worker", "harness":"cursor"}),
-            json!({"device":"Laptop", "harness":"codex"}),
             json!({"device":"Laptop", "harness":"mock"}),
-            json!({"device":"Worker", "harness":"codex", "model":"opus"}),
+            json!({"device":"Worker", "harness":"pi", "model":"anthropic/opus"}),
+            json!({"device":"Laptop", "harness":"pi", "model":"openai/remote-model"}),
         ] {
             assert!(tools.call("create_chat", args).await.is_err());
             assert!(world.writes.lock().unwrap().is_empty());
@@ -1843,12 +1829,37 @@ mod tests {
         let created = tools
             .call(
                 "create_chat",
-                json!({"device":"Worker", "harness":"codex", "model":"remote-model"}),
+                json!({"device":"Worker", "harness":"pi", "model":"openai/remote-model"}),
             )
             .await
             .unwrap();
-        assert_eq!(created["harness"], "codex");
-        assert_eq!(created["model"], "remote-model");
+        assert_eq!(created["harness"], "pi");
+        assert_eq!(created["model"], "openai/remote-model");
+        let local = tools
+            .call(
+                "create_chat",
+                json!({"device":"Laptop", "model":"anthropic/opus"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(local["harness"], "pi");
+        assert_eq!(local["model"], "anthropic/opus");
+        let reads = world.reads.lock().unwrap();
+        assert!(
+            reads
+                .iter()
+                .any(|(method, params)| method == methods::LIST_MODELS
+                    && params["targetDeviceId"] == "dev-local"
+                    && params["harness"] == "pi")
+        );
+        assert!(
+            reads
+                .iter()
+                .any(|(method, params)| method == methods::LIST_MODELS
+                    && params["targetDeviceId"] == "dev-remote"
+                    && params["harness"] == "pi")
+        );
+        drop(reads);
         for method in [methods::LIST_HARNESSES, methods::LIST_MODELS] {
             let broken = Arc::new(World {
                 catalog_error: Some(method),
@@ -1858,7 +1869,7 @@ mod tests {
             let error = tools
                 .call(
                     "create_chat",
-                    json!({"device":"Worker", "model":"remote-model"}),
+                    json!({"device":"Worker", "model":"openai/remote-model"}),
                 )
                 .await
                 .unwrap_err();
@@ -1868,6 +1879,57 @@ mod tests {
             );
             assert!(broken.writes.lock().unwrap().is_empty());
         }
+    }
+
+    #[tokio::test]
+    async fn unsupported_harness_ids_are_rejected_without_dispatch() {
+        let world = Arc::new(World::default());
+        let tools = tools(world.clone(), Origin::default());
+        for id in [
+            "claude-code",
+            "codex",
+            "cursor",
+            "opencode",
+            "devin",
+            "grok",
+            "hermes",
+            "antigravity",
+            "unknown",
+        ] {
+            for tool in ["list_models", "create_chat"] {
+                let error = tools.call(tool, json!({"harness":id})).await.unwrap_err();
+                assert!(error.contains("harness"), "{tool}: {id}: {error}");
+                assert!(world.writes.lock().unwrap().is_empty());
+            }
+        }
+        assert!(
+            !world
+                .reads
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(method, _)| method == methods::LIST_MODELS)
+        );
+    }
+
+    #[test]
+    fn default_harness_requires_available_pi_and_never_selects_mock() {
+        let mock: HarnessInfo =
+            serde_json::from_value(json!({"id":"mock", "name":"Mock", "installed":true})).unwrap();
+        let mut pi: HarnessInfo = serde_json::from_value(
+            json!({"id":"pi", "name":"Pi", "installed":true, "enabled":true}),
+        )
+        .unwrap();
+        assert_eq!(
+            default_harness(&[mock.clone(), pi.clone()]).unwrap(),
+            HarnessId::Pi
+        );
+        assert!(default_harness(&[mock.clone()]).is_err());
+        pi.installed = false;
+        assert!(default_harness(&[mock.clone(), pi.clone()]).is_err());
+        pi.installed = true;
+        pi.enabled = Some(false);
+        assert!(default_harness(&[mock, pi]).is_err());
     }
 
     #[tokio::test]
@@ -1887,7 +1949,7 @@ mod tests {
         );
         assert_eq!(
             world.writes.lock().unwrap().last().unwrap().1["command"]["request"]["harness"],
-            "codex"
+            "pi"
         );
     }
 
@@ -1952,7 +2014,7 @@ mod tests {
                     {
                         rows.as_array_mut().unwrap().push(json!({
                             "id": chat, "deviceId":"dev-remote", "archived":false,
-                            "createdAt":chrono::Utc::now(), "config":{"harness":"codex", "sandbox":"workspace-write"}
+                            "createdAt":chrono::Utc::now(), "config":{"harness":"pi", "sandbox":"workspace-write"}
                         }));
                     }
                     Ok(stream(rows))
@@ -2023,7 +2085,7 @@ mod tests {
                 never_reply: false,
                 host_skew_millis: 0,
             });
-            let tools = Tools::new(Arc::new(Zeron::with_client(
+            let tools = Tools::new(Arc::new(Paku::with_client(
                 memory_client(service),
                 Origin::default(),
             )));
@@ -2062,7 +2124,7 @@ mod tests {
                 never_reply: false,
                 host_skew_millis: 0,
             });
-            let tools = Tools::new(Arc::new(Zeron::with_client(
+            let tools = Tools::new(Arc::new(Paku::with_client(
                 memory_client(service),
                 Origin::default(),
             )));
@@ -2111,7 +2173,7 @@ mod tests {
                 never_reply: false,
                 host_skew_millis: -30_000,
             });
-            let tools = Tools::new(Arc::new(Zeron::with_client(
+            let tools = Tools::new(Arc::new(Paku::with_client(
                 memory_client(service),
                 Origin::default(),
             )));
@@ -2145,7 +2207,7 @@ mod tests {
             never_reply: true,
             host_skew_millis: 0,
         });
-        let tools = Tools::new(Arc::new(Zeron::with_client(
+        let tools = Tools::new(Arc::new(Paku::with_client(
             memory_client(service),
             Origin::default(),
         )));
@@ -2172,7 +2234,7 @@ mod tests {
         )
         .await;
         assert_eq!(init["result"]["protocolVersion"], "2025-03-26");
-        assert_eq!(init["result"]["serverInfo"]["name"], "zeron");
+        assert_eq!(init["result"]["serverInfo"]["name"], "paku");
         let list =
             crate::jsonrpc::handle_request(&tools, json!(2), "tools/list", Value::Null).await;
         assert!(list["result"]["tools"].as_array().unwrap().len() >= 10);

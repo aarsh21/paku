@@ -1,288 +1,56 @@
-# Zeron MCP server
+# Paku MCP server
 
-`zeron mcp` serves the Model Context Protocol on stdin/stdout and proxies every
-tool into the running engine's localhost IPC (`ws://127.0.0.1:$ZERON_IPC_PORT`,
-default 27654) — the same `zeron_rpc` surface the headed app and `zeron sync`
-dial. It is a subcommand of the one `zeron` binary: no Node runtime, no extra
-install, a few MB resident.
+`paku mcp` serves newline-delimited JSON-RPC MCP on stdin/stdout and proxies tools into the running engine's localhost IPC (`ws://127.0.0.1:$PAKU_IPC_PORT`, default 28654). It is a subcommand of the same desktop/headless binary. The protocol layer supports `initialize`, `ping`, `tools/list` and `tools/call` without a separate Node server.
 
-Crate: `crates/mcp` (`zeron-mcp`). The protocol layer is hand-rolled
-(`initialize`, `ping`, `tools/list`, `tools/call`; newline-delimited JSON-RPC
-2.0) — the repo already owns JSON-RPC framing for the Codex and ACP drivers and
-the stdio tool-server subset is tiny, so no SDK dependency was taken.
+## Identity and Pi injection
 
-## Identity
+The engine passes `PAKU_IPC_PORT`, `PAKU_CHAT_ID` and `PAKU_DEVICE_ID` to its MCP child. Chat identity adds a routing header to agent-to-agent messages and prevents a chat from messaging itself.
 
-The engine can inject this server into a harness's MCP config with the
-originating chat in the environment:
+Pi's native RPC process loads a temporary per-run `--extension` that bridges stdio MCP into Pi tools. The extension registers app-prefixed tools, propagates cancellation/errors and closes the MCP child when the Pi session shuts down. User Pi settings, extensions and session arguments remain intact. Title-only runs do not carry the bridge. An embedded engine that lost its IPC bind does not advertise a dead server. Paku does not install a separate Pi subagent extension.
 
-| Variable          | Meaning                                                       |
-| ----------------- | ------------------------------------------------------------- |
-| `ZERON_IPC_PORT`  | Engine to proxy (default 27654).                              |
-| `ZERON_CHAT_ID`   | The chat whose agent spawned this server.                     |
-| `ZERON_DEVICE_ID` | That chat's host device.                                      |
+## Tools and host selection
 
-When `ZERON_CHAT_ID` is set, every `send_message` is prefixed with a
-`[Message from Zeron chat <title> (<id8>) …]` line so the receiving agent and the
-human reading that transcript can tell an agent-to-agent message from a typed
-one, and the server refuses to message its own chat. The transcript renders
-this routing header as “Message from **chat name**”, keeping the full routing
-instructions in the stored prompt for agents.
-
-### Parent links
-
-`create_chat` and each request in `create_chats` accept `kind`:
-
-| Input | Placement |
+| Tool | Purpose |
 | --- | --- |
-| `kind: "chat"` | Standalone session, visible in the left **Sessions** sidebar; no `parentChatId` is written. |
-| `kind: "side"` | Child of the explicit `parent` or origin chat. Requires one of those. |
-| Kind omitted, origin or parent supplied | Child, preserving the previous default. |
-| Kind omitted, no origin or parent | Standalone, preserving terminal usage. |
+| `whoami` | Local device, engine and origin chat identity |
+| `list_devices`, `list_projects` | Discover execution hosts and workspaces |
+| `list_harnesses`, `list_models` | Discover the selected host's Pi availability and models |
+| `list_chats`, `get_chat`, `read_chat` | Registry status and transcript snapshots |
+| `create_chat`, `create_chats` | Create a standalone or child conversation, optionally send a prompt |
+| `send_message`, `send_messages` | Send/steer or explicitly queue work |
+| `wait_for_turn` | Wait for new completion/input/error state |
+| `interrupt_chat`, `respond_to_input` | Interrupt work or answer a pending question |
+| `archive_chat` | Archive a conversation |
 
-`kind: "chat"` with a nonempty `parent`, `kind: "side"` without an origin/parent,
-and unknown kinds fail before any writes. Empty `parent` uses the default.
-The creation result includes the effective `kind`, `chatId`, `deviceId`,
-`project` and `parentChatId`. Kind is derived from the parent; it is not persisted.
-
-Children record `Chat.parent_chat_id` (proto) ⇄ `parentChatId` on the registry
-row (`Mutate createChat { parentChatId? }`). Chats with a parent cannot create
-chats through MCP, including standalone and batch creation or an explicit parent
-override. A side chat cannot be selected as a parent; only one level is supported.
-
-For children, `parent` (id, prefix, or title) overrides the origin (`ZERON_CHAT_ID`).
-`list_chats { parent }` returns children, and chat summaries carry `parentChatId`.
-Rows from older engines read as parentless; a dangling parent id is tolerated.
-
-The left sidebar hides chats that have a parent: `AppState::visible_chats`
-(the Sessions list, project tabs, jump slots) and the Archived section both
-require `parent_chat_id == None`. Children remain addressable by id, deep
-link, and every MCP tool; `list_chats { parent }` is how an orchestrator
-finds them.
-
-### Injection
-
-The host engine stamps this server onto every run it drives
-(`RunRequest.mcp`, additive): the same `zeron` binary with `args: ["mcp"]`
-and the three variables above, pointed at the port the engine itself serves
-(never a port it lost the bind race for). Each driver spells it in its own
-dialect and leaves the user's configured servers alone:
-
-| Harness | Where |
-| ------- | ----- |
-| Claude  | `--mcp-config <inline json>` (no `--strict-mcp-config`)             |
-| ACP (Devin, Grok, Hermes, Antigravity) | `session/new` and `session/load` → `mcpServers: [{name, command, args, env}]` |
-| Pi | Per-run `--extension` bridges stdio MCP into Pi tools in the native RPC process |
-| OpenCode | Child-only `OPENCODE_CONFIG_CONTENT`: `mcp.zeron` on 1.x, `mcp.servers.zeron` on 2.x |
-| Codex   | `thread/start` config overrides `mcp_servers.zeron.{command,args,env}` |
-| Cursor  | SDK `Agent.create` / `Agent.resume` → inline `mcpServers.zeron`, plus `local.settingSources: ["user", "team", "mdm", "plugins"]` so `~/.cursor/mcp.json` and plugin servers load (not `project`: the SDK skips MCP approvals, so repo-defined servers would run unprompted) |
-
-OpenCode preserves inherited inline configuration and other servers. Its config
-shape follows the installed binary's major version. Cursor uses the SDK's
-[inline MCP configuration](https://cursor.com/docs/sdk/typescript); OpenCode's
-[1.x config layer](https://opencode.ai/docs/config/) and
-[2.x MCP format](https://opencode.ai/v2/docs/mcp-servers) differ.
-Pi's temporary extension lives only for the native RPC process lifetime;
-user settings, extensions, and session arguments remain intact. The bridge
-registers `zeron_<tool>` tools, propagates cancellation and errors, and closes
-the MCP child when the Pi session shuts down.
-
-Title runs never carry it. A run with no served port (embedded engine that
-lost the bind) gets no Zeron tools rather than a dead server.
-
-### Forks and the explorer
-
-`ForkSideChat { chatId, sourceChatId, parentChatId? }` copies a chat's
-history through its latest completed response into a new chat and appends
-a `fork` part (a system entry: `sourceChatId`, `sourceTitle`) as the seam;
-the transcript draws it as "This chat was forked from <title>". `parentChatId`
-defaults to the source; a side chat's own fork button passes its parent so
-the copy lists as a sibling. The file explorer's footer lists a chat's
-**Subagents** (its spawn chips) and **Chats** (its children: forks and
-`kind: "side"` spawns) and opens either in the right pane.
-
-## Tools
-
-Chats are referenced by full id, a unique id prefix, or an exact title.
-Projects by id, path, display name, or unique path suffix. Devices by id or
-name (default: the local engine's device).
-
-| Tool               | Engine calls                                              |
-| ------------------ | --------------------------------------------------------- |
-| `whoami`           | `LocalDevice`, `EngineInfo`, origin chat summary          |
-| `list_devices`     | `WatchDevices` snapshot                                   |
-| `list_projects`    | `WatchSpaces` snapshot                                    |
-| `list_harnesses`   | `ListHarnesses {targetDeviceId?}`                          |
-| `list_models`      | `ListModels {harness, targetDeviceId?}`                                    |
-| `list_chats`       | `WatchChats` + `WatchSessions` snapshots (status merged)  |
-| `get_chat`         | above + `WatchDocMessages` opening frame (pending input)  |
-| `create_chat`      | `Mutate createChat` (+ `renameChat`; optional first send) |
-| `create_chats`     | Concurrent `create_chat` requests with per-request results |
-| `send_messages`    | Concurrent `send_message` requests with per-request results |
-| `read_chat`        | `WatchDocMessages` opening `reset` frame, rendered        |
-| `send_message`     | `QueueCommand` Run / Steer, or `QueueMessage`             |
-| `wait_for_turn`    | `WatchSessions` until the chat settles                    |
-| `interrupt_chat`   | `QueueCommand` Interrupt                                  |
-| `respond_to_input` | `QueueCommand` RespondInput                               |
-| `archive_chat`     | `Mutate setChatArchived`                                  |
-
-Watch streams are the engine's only read surface (there is no one-shot "get
-transcript" RPC); a snapshot is "subscribe, take the first item, drop" — drop
-cancels server-side, exactly what the sidebar does on attach.
-
-`send_message` mode `auto` starts idle chats and steers working chats through
-their live mailbox without interrupting tools or child processes. Providers
-consume it at their next supported input boundary. Only explicit `queue` mode
-creates a held queue row. `awaitingInput` refuses and points at
-`respond_to_input`. Quiet, long-running turns still receive steering; the host
-falls back to starting a turn if the live runtime has already exited.
-
-Claude uses `priority: "next"` and confirms consumption through replayed user
-messages. Cursor uses the SDK's native `Run.steer`, waits for active tools to
-finish, and retains input until its delivery acknowledgment. New injections do
-not wait for earlier delivery acknowledgments; that wait serializes responses
-even when the SDK reports a single active turn. These are mid-turn
-paths; they do not terminate the harness process. Adapters that only accept input
-between turns are labeled **Send next** in the composer.
-
-The opt-in `steering_live` engine test checks a rapid burst, foreground and
-background process survival, retained context, exactly-once effects, and ordered
-normal queue delivery. For Claude, Cursor and Codex it additionally requires the
-burst to finish within the original turn. Set `ZERON_TEST_BURST=6` to reproduce a
-six-message burst; select an inexpensive model with `ZERON_TEST_MODEL` and the
-harness with `ZERON_TEST_HARNESS`. Codex is checked for child survival during
-the active tool: its runtime cleans up background jobs on normal tool completion
-even without steering. Other providers also check a job that outlives that tool.
-
-For conversational redirection, run `cargo run -p zeron-harness --example
-cursor_steering_probe -- gemini-3-flash`. It sends six bare digits during streamed
-prose and requires only the latest requested answer. Counting turn completions
-alone cannot distinguish real steering from serial responses inside one run.
-
-`wait_for_turn` after a send is edge-triggered on the `Session` row captured
-before the send: it returns on a new `last_completed_turn`, an
-`awaitingInput`/`errored` stamp newer than the baseline, or a working→idle
-edge. A brand-new chat has no session row until the host picks the run up, so
-the wait keeps waiting in that case rather than reporting the unstarted run as
-done (this was the one bug the first live run found).
-
-## Selecting a host and project
-
-`list_projects {device?}` filters by device id or exact name; without arguments
-it lists all projects. `list_harnesses {device?}` and
-`list_models {harness, device?}` query the selected host with `targetDeviceId`;
-without `device` they retain the local engine catalogs.
-
-For creation, project alone determines the host. Device alone creates a session
-without a project on that device. With both, the project is resolved **within**
-the selected device, and a project id belonging to another device is rejected.
-Neither argument means a projectless session on the local engine. Repeated names
-or paths are errors with candidate ids and devices; use ids from discovery.
-
-Before writing, creation checks the chosen engine's harness catalog, chooses
-its available default (Claude Code when available, otherwise the first available
-non-mock harness), and validates any explicit model against that host's catalog.
-An explicit harness must be offered, installed and enabled. Catalog failures,
-including model lookup failures, are returned with the device id; there is no
-fallback to the local catalog. A successful remote query checks reachability;
-`lastSeenAt` alone does not establish that an engine is online.
-
-Discover and launch a standalone session:
-
-```text
-list_devices {}
-list_projects { device: "<device-id>" }
-list_harnesses { device: "<device-id>" }
-list_models { device: "<device-id>", harness: "codex" }
-create_chat {
-  kind: "chat",
-  device: "<device-id>",
-  project: "<project-id>",
-  harness: "codex",
-  model: "<model-id from that host's catalog>",
-  title: "Implement feature",
-  prompt: "Implement the feature...",
-  wait: false
-}
-```
-
-Without a project (the host uses its home directory unless `cwd` is given):
+IDs are preferable to ambiguous names. `device` selects a host; `project` determines its owning host. A project from another device is rejected. Without either, a conversation is projectless on the local engine. Discovery/model validation uses the target host's catalog, not a fallback local catalog. Pi must be available on that host.
 
 ```json
-{"kind":"chat", "device":"<device-id>", "harness":"codex", "prompt":"Reply with pong", "wait":true}
+{"kind":"chat", "device":"<device-id>", "project":"<project-id>", "harness":"pi", "model":"<host catalog model-id>", "title":"Implement feature", "prompt":"Implement the feature", "wait":false}
 ```
 
-A mixed `create_chats` batch, with an origin chat or explicit top-level parent:
+`kind: "chat"` is standalone. `kind: "side"` requires an explicit parent or origin chat. Omitted kind retains the origin-parent default, or standalone when there is no parent. Contradictory/unknown kinds fail before writes. Child chats cannot create further chats; one level is supported. Children remain accessible through MCP and the explorer even when the primary sidebar hides them. Forks copy completed history and record provenance.
+
+## Steering and waiting
+
+`send_message` mode `auto` starts an idle chat or steers active Pi work at a native input boundary without interrupting tools. `queue` creates a held queue row. A pending input request must use `respond_to_input`. See [Pi lifecycle semantics](pi.md): acknowledgment is not the same as incorporation or completion.
+
+A wait following a send uses the session baseline captured before dispatch, including brand-new chats with no session row yet. It waits for a new completion/input/error state rather than returning a previous response. Completion and transcript arrival share one timeout; missing new response data produces `timedOut`. A separate MCP connection without the send baseline reports current posture.
+
+## Parallel child work
+
+`create_chats` and `send_messages` accept 1–32 independent requests and return results in input order with per-item success/error. Partial failure does not roll back other requests. Defaults are nonblocking. Do not batch ordered messages to the same chat.
 
 ```json
-{
-  "requests": [
-    {"kind":"chat", "device":"<device-id>", "project":"<project-id>", "title":"Feature", "prompt":"Implement the feature"},
-    {"kind":"side", "parent":"<parent-chat-id>", "project":"<project-id>", "prompt":"Review the API"}
-  ]
-}
+{"requests":[{"project":"/repo", "title":"Review tests", "prompt":"Review test coverage"},{"project":"/repo", "title":"Review API", "prompt":"Review API compatibility"}]}
 ```
 
-The first prompt and later sends use durable chat commands drained by the host.
-Transcript reads target the chat's host; session status comes from the shared
-registry. Sends remember the session and existing message ids on the MCP connection before
-sending, so a subsequent `wait_for_turn` after `wait:false` waits for that send,
-even before a session row appears. A separate MCP server has no send baseline
-and reports the chat's current posture. Creation records the send time before dispatching its first
-prompt. If completion arrives before the transcript, the wait allows the new
-assistant response to arrive within the **same timeout**. A previous response
-is never substituted for a missing response to a new send. An unfinished
-transcript or missing response at the deadline returns `timedOut`.
+For individual tools, dispatch all independent work with `wait:false` before collecting replies with `wait_for_turn`.
 
-## Parallel side chats
-
-Use `create_chats` with a `requests` array to launch independent workers in
-one tool call, including when the harness executes its tool calls sequentially:
-
-```json
-{
-  "requests": [
-    {"project": "/repo", "title": "Review tests", "prompt": "Review test coverage"},
-    {"project": "/repo", "title": "Review API", "prompt": "Review API compatibility"}
-  ]
-}
-```
-
-Use `send_messages` with the same envelope for existing chats; each item uses
-`send_message` arguments. Both accept 1–32 requests, run them concurrently,
-and return `results` in input order with `index`, `isError`, and either `result`
-or `error`. A failed request does not cancel or roll back successful requests.
-Each request defaults to `wait: false`; explicit waits also run concurrently.
-Only batch independent work, not ordered messages to the same chat.
-
-When using individual tools, launch **all** chats/messages with `wait: false`
-first, then collect replies with `wait_for_turn`. Waiting on each individual
-launch before issuing the next serializes work at the caller, even though
-both the MCP transport and engine support concurrent chat runs.
-
-## Smoke recipe
+## Validation
 
 ```sh
-BIN=target/debug/zeron
-{ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}'
-  echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_chats","arguments":{"limit":5}}}'
-  sleep 5; } | ZERON_IPC_PORT=27655 $BIN mcp
+cargo test -p paku-mcp
+cargo test -p paku-harness --features native-fixture --test pi_mcp
 ```
 
-`create_chat` with `"prompt": "Reply with exactly the word pong", "wait": true`
-against a live daemon returns the assistant's `pong` in a few seconds; archive
-the chat afterwards with `archive_chat`. Unit tests (`cargo test -p zeron-mcp`)
-drive the whole tool set against an in-memory stub `RpcService`.
-
-An isolated stdio instance is available with
-`cargo run -p zeron-engine --example mcp_standalone_smoke`. It provides a temporary
-project, an origin coordinator and a scripted `codex` adapter (`smoke-1`) returning
-`pong`. Discover its ids with the list tools, create `kind: "chat"` with a prompt
-and `wait: true`, then check `read_chat`, `send_message` and a mixed batch. The
-profile is removed on exit. This checks MCP dispatch and engine execution without
-changing your running app's sessions or requiring provider credentials.
-
-The `mcp_standalone_session_executes_on_the_selected_device` test in
-`device_routing` additionally runs two engines with a shared registry and device
-relay, verifies execution on the selected host (and absence of execution on the
-caller), and retrieves responses through MCP.
+These deterministic suites exercise dispatch and the Pi bridge. Live model behavior and optional multi-device deployment require separate validation; no hosted Paku backend is provided.

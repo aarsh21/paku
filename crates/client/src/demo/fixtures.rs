@@ -2,8 +2,8 @@
 //! projectless, child, archived), live statuses, and PRs in every state.
 
 use chrono::Utc;
-use zeron_doc::RegistryDoc;
-use zeron_proto::{
+use paku_doc::RegistryDoc;
+use paku_proto::{
     ChangeRequestState, ChangeRequestSummary, Chat, ChatConfig, CheckoutChangeRequestStatus,
     ConversationSourceContext, Device, HarnessId, ReasoningLevel, SandboxLevel, Session,
     SessionStatus, SidebarPinChange, SidebarSectionChange, Space,
@@ -50,8 +50,8 @@ pub(crate) fn chats() -> Vec<DemoChat> {
         device,
         title,
         preview,
-        harness: ClaudeCode,
-        model: "claude-fable-5",
+        harness: Pi,
+        model: "anthropic/claude-fable-5",
         reasoning: XHigh,
         branch: None,
         pr: None,
@@ -71,7 +71,7 @@ pub(crate) fn chats() -> Vec<DemoChat> {
             created_ago_ms: HOUR,
             ..chat(
                 "chat-veil",
-                Some("space-zeron"),
+                Some("space-paku"),
                 MAC,
                 "Streaming veil on transcript rows",
                 "Opening the PR now. Running the checks first:",
@@ -84,18 +84,18 @@ pub(crate) fn chats() -> Vec<DemoChat> {
             last_ago_ms: 2 * MIN,
             created_ago_ms: 2 * HOUR,
             seen: false,
-            model: "claude-opus-5",
+            model: "anthropic/claude-opus-5",
             ..chat(
                 "chat-picker",
-                Some("space-zeron"),
+                Some("space-paku"),
                 MAC,
                 "Model picker catalog sync",
                 "Before I wire the RPC, two decisions:",
             )
         },
         DemoChat {
-            harness: Codex,
-            model: "gpt-5.6-terra",
+            harness: Pi,
+            model: "openai/gpt-5.6-terra",
             reasoning: High,
             branch: Some("fix/tool-colors"),
             pr: Some((77, Closed, "Refine tool group colors")),
@@ -103,7 +103,7 @@ pub(crate) fn chats() -> Vec<DemoChat> {
             seen: false,
             ..chat(
                 "chat-tabs",
-                Some("space-zeron"),
+                Some("space-paku"),
                 MAC,
                 "Tool group header colors",
                 "Done — failed children stay quiet.",
@@ -141,9 +141,9 @@ pub(crate) fn chats() -> Vec<DemoChat> {
             )),
             last_ago_ms: 80 * MIN,
             seen: false,
-            harness: Codex,
-            model: "gpt-6-astra",
-            reasoning: Ultra,
+            harness: Pi,
+            model: "openai/gpt-6-astra",
+            reasoning: XHigh,
             ..chat(
                 "chat-ios-scroll",
                 Some("space-mobile"),
@@ -164,7 +164,7 @@ pub(crate) fn chats() -> Vec<DemoChat> {
         },
         DemoChat {
             last_ago_ms: 2 * HOUR,
-            model: "claude-sonnet-5",
+            model: "anthropic/claude-sonnet-5",
             reasoning: Medium,
             ..chat(
                 "chat-home",
@@ -178,7 +178,7 @@ pub(crate) fn chats() -> Vec<DemoChat> {
             last_ago_ms: 10 * MIN,
             ..chat(
                 "chat-cjk",
-                Some("space-zeron-vps"),
+                Some("space-paku-vps"),
                 VPS,
                 "多言語テキストのレイアウト 🌏",
                 "日本語の長い段落です。",
@@ -200,7 +200,7 @@ pub(crate) fn chats() -> Vec<DemoChat> {
             last_ago_ms: 30 * MIN,
             ..chat(
                 "chat-side",
-                Some("space-zeron"),
+                Some("space-paku"),
                 MAC,
                 "Side chat: veil timing",
                 "α = 0.2 over inter-append gaps",
@@ -212,7 +212,7 @@ pub(crate) fn chats() -> Vec<DemoChat> {
             created_ago_ms: 4 * DAY,
             ..chat(
                 "chat-oklch",
-                Some("space-zeron"),
+                Some("space-paku"),
                 MAC,
                 "OKLCH conversion drift",
                 "Gamma encode matches now.",
@@ -220,8 +220,8 @@ pub(crate) fn chats() -> Vec<DemoChat> {
         },
         DemoChat {
             archived: true,
-            harness: Codex,
-            model: "gpt-5.5",
+            harness: Pi,
+            model: "openai/gpt-5.5",
             reasoning: High,
             last_ago_ms: 6 * DAY,
             created_ago_ms: 7 * DAY,
@@ -249,8 +249,8 @@ pub(crate) fn spaces(now: i64) -> Vec<Space> {
             repository_id: None,
             created_at: ms(now - ago),
         };
-    let zeron = |mut space: Space| {
-        space.repository_id = Some("github.com/zeronsh/zeron".into());
+    let paku = |mut space: Space| {
+        space.repository_id = Some("github.com/zeronsh/paku".into());
         space
     };
     vec![
@@ -262,19 +262,19 @@ pub(crate) fn spaces(now: i64) -> Vec<Space> {
             false,
             20 * DAY,
         ),
-        zeron(space(
-            "space-zeron",
+        paku(space(
+            "space-paku",
             MAC,
-            "/Users/dev/zeron",
+            "/Users/dev/paku",
             None,
             true,
             9 * DAY,
         )),
         // A second clone of the same repository on the VPS.
-        zeron(space(
-            "space-zeron-vps",
+        paku(space(
+            "space-paku-vps",
             VPS,
-            "/srv/src/zeron",
+            "/srv/src/paku",
             None,
             true,
             6 * DAY,
@@ -283,8 +283,8 @@ pub(crate) fn spaces(now: i64) -> Vec<Space> {
         space(
             "space-mobile",
             MAC,
-            "/Users/dev/zeron-ios",
-            Some("Zeron iOS"),
+            "/Users/dev/paku-ios",
+            Some("Paku iOS"),
             true,
             2 * DAY,
         ),
@@ -300,7 +300,6 @@ pub(crate) fn devices(self_id: &str, self_name: &str, now: i64) -> Vec<Device> {
             last_seen_at: Some(ms(seen)),
             created_at: Some(ms(now - 30 * DAY)),
             version: Some(version.into()),
-            cursor_sdk_version: None,
             capabilities: if caps {
                 capability::ALL_QUEUE
                     .iter()
@@ -360,7 +359,7 @@ pub(crate) fn seed(
     fixture: DemoFixture,
     self_id: &str,
     self_name: &str,
-) -> Result<Seeded, zeron_doc::DocError> {
+) -> Result<Seeded, paku_doc::DocError> {
     let now = crate::now_ms();
     let all_devices = devices(self_id, self_name, now);
     let mut change_requests = Vec::new();
@@ -452,7 +451,7 @@ pub(crate) fn seed(
                     provider: "github".into(),
                     number,
                     title: title.into(),
-                    url: format!("https://github.com/zeron-sh/zeron/pull/{number}"),
+                    url: format!("https://github.com/paku-sh/paku/pull/{number}"),
                     state,
                     base_ref: "main".into(),
                     head_ref: source.branch.clone(),

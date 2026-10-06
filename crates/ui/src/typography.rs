@@ -84,7 +84,7 @@ impl<'de> Deserialize<'de> for UiFontFamily {
 pub struct UiFontSize(u8);
 
 impl UiFontSize {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 10] = [
         Self(12),
         Self(13),
         Self(14),
@@ -92,6 +92,10 @@ impl UiFontSize {
         Self(16),
         Self(18),
         Self(20),
+        // Larger interface text preferences, independent of whole-UI zoom.
+        Self(24),
+        Self(28),
+        Self(32),
     ];
 
     pub const fn pixels(self) -> f32 {
@@ -563,8 +567,8 @@ fn reinstall_theme(cx: &mut App) {
     crate::theme::Theme::install_selection(
         appearance,
         themes.variant_id(match appearance {
-            crate::theme::Appearance::Dark => zeron_theme::Appearance::Dark,
-            crate::theme::Appearance::Light => zeron_theme::Appearance::Light,
+            crate::theme::Appearance::Dark => paku_theme::Appearance::Dark,
+            crate::theme::Appearance::Light => paku_theme::Appearance::Light,
         }),
         crate::appearance::accent(cx),
         crate::appearance::surface(cx),
@@ -843,8 +847,29 @@ mod tests {
     fn ui_font_sizes_have_stable_labels_and_normalize() {
         assert_eq!(UiFontSize::default().label().as_ref(), "16 px");
         assert_eq!(UiFontSize(19).normalized(), UiFontSize(18));
-        assert_eq!(UiFontSize(250).normalized(), UiFontSize(20));
+        assert_eq!(UiFontSize(250).normalized(), UiFontSize(32));
         assert_eq!(ui_rems(14.0).0, 0.875);
+    }
+
+    #[test]
+    fn larger_native_ui_sizes_are_selectable_and_preserved() {
+        for pixels in [24, 28, 32] {
+            let size = UiFontSize(pixels);
+            assert!(UiFontSize::ALL.contains(&size));
+            assert_eq!(size.normalized(), size);
+            assert_eq!(size.label().as_ref(), format!("{pixels} px"));
+            let json = serde_json::to_string(&size).unwrap();
+            let saved: UiFontSize = serde_json::from_str(&json).unwrap();
+            assert_eq!(saved.normalized(), size);
+        }
+        assert_eq!(
+            UiFontSize(24).pixels() / UiFontSize::default().pixels(),
+            1.5
+        );
+        assert_eq!(
+            UiFontSize(32).pixels() / UiFontSize::default().pixels(),
+            2.0
+        );
     }
 
     #[test]

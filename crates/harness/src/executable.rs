@@ -1,4 +1,4 @@
-//! Cross-platform executable discovery shared by native and ACP harnesses.
+//! Cross-platform Pi and installer executable discovery.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -17,10 +17,6 @@ impl Platform {
             Self::Unix
         }
     }
-}
-
-pub(crate) fn home_dir() -> Option<PathBuf> {
-    home_dir_with(&|key| std::env::var_os(key), Platform::current())
 }
 
 /// Resolve a portable user base directory without assuming Unix's `/` exists.
@@ -94,16 +90,6 @@ pub(crate) fn find_on_paths(exe: &str, extra: Vec<PathBuf>) -> Option<PathBuf> {
         },
     );
     newest_candidate(candidates)
-}
-
-pub(crate) fn binary_hint(path: &Path) -> String {
-    format!(
-        "{} (version {})",
-        path.display(),
-        binary_version(path)
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "unknown".into())
-    )
 }
 
 fn runnable(path: &Path) -> bool {

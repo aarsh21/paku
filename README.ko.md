@@ -1,56 +1,25 @@
-# Zeron
+# Paku
 
-코딩 에이전트(Claude Code, Codex, Cursor, Devin, Grok, Hermes, Pi, Antigravity)를 기본적으로 로컬에서 관리하고, 필요하면 여러 기기 간 동기화도 사용할 수 있습니다.
+Paku는 [Pi](https://github.com/badlogic/pi-mono)를 위한 로컬 우선 네이티브 데스크톱 및 헤드리스 앱입니다. [Zeron](https://github.com/zeronsh/zeron)의 **Pi 전용 포크**이며, 원본 앱·아키텍처·구현의 공로는 Zeron 기여자에게 있습니다. Zeron이나 Pi의 공식 제품이 아닌 독립 프로젝트입니다.
 
-*[English](README.md) | [简体中文](README.zh-CN.md) | 한국어 | [日本語](README.ja.md)*
+[English](README.md) | [简体中文](README.zh-CN.md) | 한국어 | [日本語](README.ja.md)
 
-![Zeron 데스크톱 앱](docs/media/readme/app-screenshot.jpg)
+## 소스에서 실행
 
-## 데스크톱 앱
+`rust-toolchain.toml`의 Rust 도구 모음, [플랫폼 빌드 의존성](dist/README.md), 인증된 Pi CLI(0.85.1 이상)가 필요합니다.
 
-[GitHub Releases](https://github.com/zeronsh/zeron/releases/latest)에서 플랫폼에 맞는 최신 버전을 내려받으세요.
-
-- **macOS** — `zeron-<version>-macos-arm64.dmg`
-- **Windows** — `zeron-<version>-windows-x86_64-setup.exe`
-- **Linux** — `zeron-<version>-linux-<arch>.tar.gz`의 압축을 풀고 안에 있는 `install.sh` 실행
-
-계정이나 네트워크 연결이 필요 없으며, 세션은 사용 중인 기기에 저장됩니다. 앱은 자동으로 업데이트됩니다.
-
-## 헤드리스 실행 (CLI)
-
-서버처럼 디스플레이가 없는 머신용입니다. 예를 들어 노트북을 닫은 뒤에도 에이전트를 계속 돌려 두는 VPS에 쓰면 됩니다. Linux만 지원합니다.
-
-```bash
-curl -fsSL https://zeron.sh/install.sh | sh
-zeron status
+```sh
+git clone https://github.com/aarsh21/paku.git
+cd paku
+cargo run -p paku
+# 헤드리스 모드
+cargo run -p paku -- headless
 ```
 
-설치 스크립트는 엔진을 백그라운드 서비스로 실행하며, 재부팅 후에도 자동으로 다시 시작됩니다.
+Paku는 `pi --mode rpc`를 직접 실행합니다. `PI_EXECUTABLE`로 실행 파일을 선택하며, 모델과 자격 증명은 Pi에서 관리합니다. [Pi 통합](docs/pi.md)을 참고하세요.
 
-```bash
-zeron status      # 로컬/동기화 모드와 엔진 상태 확인
-zeron update      # 최신 버전으로 업데이트
-zeron daemon start|stop|restart|status
-```
+로컬 세션에는 Paku 계정이 필요 없고 기록과 첨부 파일은 로컬에 저장됩니다. Pi는 설정한 모델 제공자에 연결합니다. 이 포크는 호스팅된 Paku 서비스를 제공하지 않습니다. 선택적 동기화에는 직접 구성한 Cloudflare 리소스와 인증이 필요합니다. [셀프 호스팅](docs/self-hosting.md)을 참고하세요. 같은 계정의 기기는 작업 공간 읽기·쓰기 권한을 가진 신뢰할 수 있는 피어입니다.
 
-## 여러 기기 간 동기화 (선택)
+현재는 소스 빌드를 사용하세요. [Paku Releases](https://github.com/aarsh21/paku/releases)는 향후 게시된 빌드를 확인하는 곳이며, 기존 다운로드·자동 업데이트·공개 설치 서비스를 보장하지 않습니다. 검증 명령은 [English README](README.md)에 있습니다.
 
-로그인하면 한 기기에서 에이전트를 시작하고 다른 기기에서 이어서 보거나 조작할 수 있습니다.
-
-```bash
-zeron daemon stop
-zeron login        # 로컬 전용 모드로 돌아가려면 zeron logout
-zeron daemon start
-```
-
-같은 계정에 로그인한 기기끼리는 서로의 워크스페이스 파일을 읽고 쓸 수 있으므로, 신뢰하는 기기에서만 로그인하세요. 기존 로컬 세션은 업로드되지 않습니다.
-
-## 후원
-
-Zeron을 후원해 주신 [The Context Company](https://www.thecontextcompany.com/)에 감사드립니다. [GitHub에서 후원자가 되어](https://github.com/sponsors/zeronsh) Zeron 개발을 지원하실 수도 있습니다.
-
----
-
-개발에 참여하고 싶거나 동작 방식이 궁금하다면 [Ask DeepWiki](https://deepwiki.com/zeronsh/zeron) 또는 [ARCHITECTURE.md](ARCHITECTURE.md)를 확인하세요.
-
-[MIT License](LICENSE)로 배포됩니다.
+[아키텍처](ARCHITECTURE.md) · [MIT 라이선스](LICENSE) · [서드 파티 고지](THIRD_PARTY_NOTICES.md)

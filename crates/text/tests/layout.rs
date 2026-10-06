@@ -4,8 +4,8 @@
 mod common;
 
 use common::*;
+use paku_text::*;
 use unicode_segmentation::UnicodeSegmentation;
-use zeron_text::*;
 
 fn segs(p: &Prepared) -> Vec<(&str, &str)> {
     p.segment_ranges()

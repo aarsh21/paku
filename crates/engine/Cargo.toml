@@ -1,18 +1,18 @@
 [package]
-name = "zeron-engine"
+name = "paku-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
 [dependencies]
-zeron-preview.workspace = true
-zeron-proto.workspace = true
-zeron-doc.workspace = true
-zeron-sync.workspace = true
-zeron-harness.workspace = true
-zeron-rpc.workspace = true
-zeron-update.workspace = true
+paku-preview.workspace = true
+paku-proto.workspace = true
+paku-doc.workspace = true
+paku-sync.workspace = true
+paku-harness.workspace = true
+paku-rpc.workspace = true
+paku-update.workspace = true
 loro.workspace = true
 tokio.workspace = true
 futures.workspace = true
@@ -43,9 +43,7 @@ tempfile.workspace = true
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Pipes", "Win32_System_Threading"] }
 
 [dev-dependencies]
-zeron-mcp.workspace = true
-zeron-harness = { workspace = true, features = ["installer-fixture"] }
-zip.workspace = true
+paku-mcp.workspace = true
 tokio-tungstenite.workspace = true
 # In-process registry server for the two-engine workspace integration tests.
-zeron-sync = { workspace = true, features = ["mock-server"] }
+paku-sync = { workspace = true, features = ["mock-server"] }

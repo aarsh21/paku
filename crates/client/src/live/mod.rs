@@ -1,6 +1,6 @@
 //! Live mode: the edge transports behind [`crate::Client`].
 //!
-//! - registry: `RegistryClient` over the shared [`zeron_doc::RegistryDoc`]
+//! - registry: `RegistryClient` over the shared [`paku_doc::RegistryDoc`]
 //!   (WS + HTTPS pull/push), persisted in the docs store, presence beats,
 //!   sidebar-pin reconciliation once synced;
 //! - rooms ([`room`]): one chat2 `ChatClient` per open session;
@@ -24,13 +24,13 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use futures::future::BoxFuture;
-use tokio::sync::Notify;
-use tokio_util::sync::CancellationToken;
-use zeron_doc::{REGISTRY_DOC_ID, RegistryDoc};
-use zeron_sync::{
+use paku_doc::{REGISTRY_DOC_ID, RegistryDoc};
+use paku_sync::{
     DocsStore, RegistryClient, RegistryEvent, RegistryTransport, RegistryTuning, SyncError,
     UrlProvider,
 };
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 use crate::client::ClientInner;
 use crate::error::{ClientError, Result};
@@ -50,11 +50,11 @@ const OFFLINE_PARK: Duration = Duration::from_secs(30);
 /// Sleep `wait` (jittered), cut short by wake/online events. `false` when
 /// cancelled.
 pub(crate) async fn wait_backoff(cancel: &CancellationToken, wait: Duration) -> bool {
-    let mut wake = zeron_sync::wake::subscribe();
-    let mut online = zeron_sync::wake::subscribe_online();
+    let mut wake = paku_sync::wake::subscribe();
+    let mut online = paku_sync::wake::subscribe_online();
     while online.try_recv().is_ok() {}
     let jitter = Duration::from_millis((now_ms().unsigned_abs() % 250) + 1);
-    let wait = if zeron_sync::wake::path_is_offline() {
+    let wait = if paku_sync::wake::path_is_offline() {
         wait.max(OFFLINE_PARK)
     } else {
         wait + jitter
@@ -85,12 +85,12 @@ impl Bearer {
 }
 
 #[async_trait::async_trait]
-impl zeron_rpc::TokenSource for Bearer {
-    async fn token(&self) -> std::result::Result<String, zeron_rpc::TokenError> {
+impl paku_rpc::TokenSource for Bearer {
+    async fn token(&self) -> std::result::Result<String, paku_rpc::TokenError> {
         match self.get().await {
             Ok(token) => Ok(token),
-            Err(SyncError::Auth(_) | SyncError::Closed) => Err(zeron_rpc::TokenError::SignedOut),
-            Err(err) => Err(zeron_rpc::TokenError::TemporarilyUnavailable(
+            Err(SyncError::Auth(_) | SyncError::Closed) => Err(paku_rpc::TokenError::SignedOut),
+            Err(err) => Err(paku_rpc::TokenError::TemporarilyUnavailable(
                 err.to_string(),
             )),
         }
@@ -313,7 +313,7 @@ impl LiveBackend {
                 .await
                 .is_ok_and(|r| r.status().is_success());
             if ok {
-                zeron_sync::wake::notify_online();
+                paku_sync::wake::notify_online();
             }
         });
     }
@@ -349,7 +349,7 @@ impl LiveBackend {
                 client.redial();
             }
         }
-        zeron_sync::wake::notify_online();
+        paku_sync::wake::notify_online();
     }
 
     fn flush_registry_now_with(&self, inner: Option<&ClientInner>) {

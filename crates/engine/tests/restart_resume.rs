@@ -3,9 +3,9 @@
 //! is run twice over one data dir, asserting
 //! - chats + transcripts survive a graceful shutdown → relaunch;
 //! - the next run in an existing chat carries the chat's stored harness-native
-//!   session id as `RunRequest.resume` (engine-owned, zeron sessions.ts:736);
+//!   session id as `RunRequest.resume` (engine-owned, paku sessions.ts:736);
 //! - a kill -9 style crash recovers the session id from the run journal
-//!   (zeron recoverDraft, sessions.ts:538-552) and stamps streaming entries
+//!   (paku recoverDraft, sessions.ts:538-552) and stamps streaming entries
 //!   `aborted`;
 //! - resume is cwd-scoped (harness session stores are keyed by cwd);
 //! - a startup crash retries once with the resume kept, and a helper that is
@@ -20,16 +20,16 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 
-use zeron_doc::{
+use paku_doc::{
     MessagePart, MessageRole, MessageStatus, SessionCommandPayload, SessionDoc, SessionMessageEntry,
 };
-use zeron_engine::{EngineCore, HarnessRegistry, RunJournal};
-use zeron_harness::{Harness, HarnessError, RunControls};
-use zeron_proto::{
+use paku_engine::{EngineCore, HarnessRegistry, RunJournal};
+use paku_harness::{Harness, HarnessError, RunControls};
+use paku_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SandboxLevel,
     SteeringMode,
 };
-use zeron_sync::DocsStore;
+use paku_sync::DocsStore;
 
 const CHAT: &str = "chat-restart";
 
@@ -541,7 +541,7 @@ async fn persistent_session_serves_multiple_turns_on_one_child() {
     )
     .await;
 
-    // The session PARKS (zeron runsBySession): the second message routes into
+    // The session PARKS (paku runsBySession): the second message routes into
     // the live child instead of spawning a new one.
     queue_run(&core, "second", "/tmp", "msg-user-2");
     wait_for(
@@ -648,7 +648,7 @@ async fn fresh_crash_auto_resumes_and_notes_the_interruption() {
         },
     );
 
-    // The run is PICKED BACK UP without any user action (zeron: "not just
+    // The run is PICKED BACK UP without any user action (paku: "not just
     // eulogized"): recovery re-dispatches the crashed prompt itself.
     wait_for(
         || complete_assistant_count(&core) == 1,
@@ -825,111 +825,6 @@ async fn persistent_startup_crash_keeps_stored_session_id() {
     assert_eq!(
         stored_harness_session(&core),
         Some(("hs-live".into(), Some("/tmp".into())))
-    );
-    core.shutdown().await;
-}
-
-/// Real-CLI proof of the whole regression fix: tell claude a codeword, restart
-/// the engine (fresh `EngineCore::assemble` over the same data dir), ask for
-/// the codeword back — the reply can only contain it if the second run resumed
-/// the first run's harness session. Ignored by default: needs an installed,
-/// authenticated `claude` CLI and spends real tokens (haiku, two tiny turns).
-/// Run with: `cargo test -p zeron-engine --test restart_resume -- --ignored`
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "requires installed+authenticated claude CLI; spends tokens"]
-async fn real_claude_remembers_codeword_across_engine_restart() {
-    let tmp = tempfile::tempdir().unwrap();
-    let dir = tmp.path().join("data");
-    let cwd = tmp.path().join("project");
-    std::fs::create_dir_all(&cwd).unwrap();
-    let cwd = cwd.to_string_lossy().to_string();
-
-    let real_request = |prompt: &str| RunRequest {
-        mcp: None,
-        prompt: prompt.into(),
-        harness: None,
-        model: Some("haiku".into()),
-        reasoning: None,
-        model_options: Default::default(),
-        cwd: cwd.clone(),
-        sandbox: SandboxLevel::WorkspaceWrite,
-        auto_approve: false,
-        attachments: Vec::new(),
-        worktree: None,
-        resume: None,
-    };
-    let assemble_real = || {
-        EngineCore::assemble(
-            &dir,
-            Arc::new(zeron_engine::default_registry()),
-            HarnessId::ClaudeCode,
-            None,
-        )
-        .expect("engine core assembles")
-    };
-
-    let core = assemble_real();
-    pre_title(&core); // keep the auto-titler from spending a second model call
-    core.doc_host
-        .queue_command(
-            CHAT,
-            SessionCommandPayload::Run {
-                request: real_request(
-                    "Remember the codeword: PINEAPPLE. Reply with exactly: stored",
-                ),
-                message_id: "msg-user-1".into(),
-            },
-        )
-        .expect("queue first real run");
-    wait_for_within(
-        || complete_assistant_count(&core) == 1,
-        "first real claude turn",
-        Duration::from_secs(120),
-    )
-    .await;
-    assert!(
-        stored_harness_session(&core).is_some(),
-        "claude session id must be stored on the chat row"
-    );
-    core.shutdown().await;
-    drop(core);
-
-    // "App restart": a brand-new engine over the same data dir.
-    let core = assemble_real();
-    core.doc_host
-        .queue_command(
-            CHAT,
-            SessionCommandPayload::Run {
-                request: real_request(
-                    "What was the codeword I told you earlier? Reply with just the codeword.",
-                ),
-                message_id: "msg-user-2".into(),
-            },
-        )
-        .expect("queue second real run");
-    wait_for_within(
-        || complete_assistant_count(&core) == 2,
-        "post-restart real claude turn",
-        Duration::from_secs(120),
-    )
-    .await;
-
-    let entries = entries_now(&core);
-    let last_assistant_text: String = entries
-        .iter()
-        .rev()
-        .find(|e| e.role == MessageRole::Assistant)
-        .into_iter()
-        .flat_map(|e| {
-            e.parts.iter().filter_map(|p| match p {
-                MessagePart::Text { text, .. } => Some(text.clone()),
-                _ => None,
-            })
-        })
-        .collect();
-    assert!(
-        last_assistant_text.to_uppercase().contains("PINEAPPLE"),
-        "post-restart reply must recall the codeword (got: {last_assistant_text:?})"
     );
     core.shutdown().await;
 }

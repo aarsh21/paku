@@ -2,7 +2,7 @@
 
 The **transcript** is laid out _analytically_: every row's height is known
 before it is shown, so scrolling never guesses. Inline `code spans` get chips,
-[links](https://zeron.sh/docs) are tappable, and ~~old ideas~~ are struck.
+[links](https://github.com/aarsh21/paku/docs) are tappable, and ~~old ideas~~ are struck.
 
 ## Steps
 
@@ -29,9 +29,9 @@ fn main() {
 
 | Crate | Role | Lines |
 |:------|:----:|------:|
-| zeron-text | measurement + line breaking | 3,100 |
-| zeron-markdown | incremental parse | 1,700 |
-| zeron-mobile | layout + FFI | 1,400 |
+| paku-text | measurement + line breaking | 3,100 |
+| paku-markdown | incremental parse | 1,700 |
+| paku-mobile | layout + FFI | 1,400 |
 
 ---
 

@@ -1,8 +1,8 @@
 //! Workspace drag targets are scoped to the tree viewport; the chat keeps its own receiver.
 use super::*;
 use gpui::{AnyElement, Bounds, CursorStyle, DragMoveEvent};
+use paku_proto::WorkspaceEntryKind;
 use std::{cell::RefCell, rc::Rc};
-use zeron_proto::WorkspaceEntryKind;
 
 #[derive(Default)]
 pub(super) struct TreeDrag {

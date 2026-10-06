@@ -12,8 +12,8 @@ use gpui::{
     KeyDownEvent, ObjectFit, Pixels, Point, Render, ScrollDelta, SharedString, StyledImage as _,
     Subscription, Window, div, img, point, prelude::*, px,
 };
-use zeron_theme::vscode::{ImportReport, SourceCompilation};
-use zeron_theme::{
+use paku_theme::vscode::{ImportReport, SourceCompilation};
+use paku_theme::{
     AccentPreset, AccentSelection, CustomThemeEntry, CustomThemeStatus, InstallMode,
     SurfacePreference, SurfaceTreatment, ThemeRegistry, ThemeSelection,
 };
@@ -296,6 +296,7 @@ pub struct AppearancePage {
     font_list: widgets::PageScroll,
     terminal_font_list: widgets::PageScroll,
     code_font_list: widgets::PageScroll,
+    scale_select: widgets::SelectState,
     size_select: widgets::SelectState,
     terminal_size_select: widgets::SelectState,
     code_size_select: widgets::SelectState,
@@ -563,6 +564,7 @@ impl AppearancePage {
             font_list: widgets::PageScroll::default(),
             terminal_font_list: widgets::PageScroll::default(),
             code_font_list: widgets::PageScroll::default(),
+            scale_select: widgets::SelectState::default(),
             size_select: widgets::SelectState::default(),
             terminal_size_select: widgets::SelectState::default(),
             code_size_select: widgets::SelectState::default(),
@@ -1521,10 +1523,10 @@ fn preview(
     }
 }
 
-fn model_appearance(appearance: Appearance) -> zeron_theme::Appearance {
+fn model_appearance(appearance: Appearance) -> paku_theme::Appearance {
     match appearance {
-        Appearance::Dark => zeron_theme::Appearance::Dark,
-        Appearance::Light => zeron_theme::Appearance::Light,
+        Appearance::Dark => paku_theme::Appearance::Dark,
+        Appearance::Light => paku_theme::Appearance::Light,
     }
 }
 
@@ -1551,7 +1553,7 @@ fn compact_action(
     widgets::text_action(theme, widgets::ActionTone::Outlined, label).id(id.into())
 }
 
-fn import_scene_preview(variant: &zeron_theme::ThemeVariant) -> AnyElement {
+fn import_scene_preview(variant: &paku_theme::ThemeVariant) -> AnyElement {
     let theme = Theme::from_variant(
         variant,
         AccentSelection::ThemeDefault,
@@ -1683,7 +1685,7 @@ fn report_panel(theme: &Theme, report: &ImportReport) -> impl IntoElement {
             .children(report.adjustments.iter().map(|adjustment| {
                 div().mt(px(4.0)).child(SharedString::from(format!(
                     "Adjusted · {} {} → {} · {}",
-                    adjustment.zeron_role,
+                    adjustment.paku_role,
                     adjustment.original,
                     adjustment.resolved,
                     adjustment.reason
@@ -1713,7 +1715,7 @@ fn report_panel(theme: &Theme, report: &ImportReport) -> impl IntoElement {
             .children(report.mappings.iter().map(|mapping| {
                 div().mt(px(4.0)).child(SharedString::from(format!(
                     "{} ← {}",
-                    mapping.zeron_role, mapping.vscode_key
+                    mapping.paku_role, mapping.vscode_key
                 )))
             })),
     )
@@ -2404,7 +2406,7 @@ impl AppearancePage {
                             .mt(px(1.0))
                             .flex_none(),
                     )
-                    .child("Zeron finds light and dark variants automatically."),
+                    .child("Paku finds light and dark variants automatically."),
             );
         }
 
@@ -3846,7 +3848,7 @@ impl Render for AppearancePage {
                             vec![
                                 div()
                                     .child(
-                                        "Hold animations still while Zeron isn't the focused window.",
+                                        "Hold animations still while Paku isn't the focused window.",
                                     )
                                     .into_any_element(),
                             ],
@@ -3914,6 +3916,52 @@ impl Render for AppearancePage {
         let terminal_size = self.render_size_picker(FontKind::Terminal, &theme, fixed.clone(), cx);
         let code_size = self.render_size_picker(FontKind::Code, &theme, fixed.clone(), cx);
 
+        let scale = crate::ui_scale::current(cx);
+        let mut scales = crate::ui_scale::PRESETS.to_vec();
+        if !scales.contains(&scale) {
+            scales.push(scale);
+            scales.sort_by(f32::total_cmp);
+        }
+        let selected_scale = scales
+            .iter()
+            .position(|preset| *preset == scale)
+            .unwrap_or(1);
+        let scale_control = widgets::select(
+            "interface-scale",
+            "Interface scale",
+            &theme,
+            |page: &mut Self| &mut page.scale_select,
+        )
+        .options(
+            scales
+                .iter()
+                .map(|preset| widgets::SelectOption::new(format!("{:.0}%", preset * 100.0))),
+            selected_scale,
+        )
+        .width(96.0)
+        .on_select(move |_, ix, window, cx| {
+            crate::ui_scale::set(scales[ix], window, cx);
+            cx.notify();
+        })
+        .render(&self.scale_select, cx);
+        let scale_row = widgets::card_row(&theme, true)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(widgets::row_title(&theme, "Interface scale"))
+                    .child(widgets::meta_line(
+                        &theme,
+                        vec![div()
+                            .child("Scale all icons, buttons, padding, panels and text. Font sizes below stay independent.")
+                            .into_any_element()],
+                    )),
+            )
+            .child(scale_control);
+        let scale_section = widgets::section_card(&theme)
+            .mt(px(24.0))
+            .font_family(fixed.clone())
+            .child(scale_row);
         let mut font_rows = widgets::section_card(&theme)
             .mt_0()
             .font_family(fixed.clone());
@@ -4029,6 +4077,7 @@ impl Render for AppearancePage {
                         .child(
                             widgets::page_column()
                                 .child(widgets::page_header(&theme, "Appearance", None))
+                                .child(scale_section)
                                 .child(
                                     widgets::section(
                                         &theme,
@@ -4291,13 +4340,11 @@ mod tests {
     fn registry_offers_both_appearances_and_keeps_single_dark_families_valid() {
         let registry = ThemeRegistry::builtin();
         assert_eq!(
-            registry
-                .variants_for(zeron_theme::Appearance::Light)
-                .count(),
+            registry.variants_for(paku_theme::Appearance::Light).count(),
             10
         );
         assert_eq!(
-            registry.variants_for(zeron_theme::Appearance::Dark).count(),
+            registry.variants_for(paku_theme::Appearance::Dark).count(),
             20
         );
     }
@@ -4510,6 +4557,53 @@ mod tests {
         }
         assert!(FontKind::Terminal.size_labels().contains(&"13 px".into()));
         assert!(FontKind::Code.size_labels().contains(&"12.5 px".into()));
+    }
+
+    #[gpui::test]
+    fn interface_scale_control_zooms_the_window_without_rewriting_font_preferences(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let initial = crate::settings::UiSettings {
+            ui_font_size: UiFontSize::ALL[8],
+            terminal_font_size: 18.0,
+            code_font_size: 14.0,
+            ..Default::default()
+        };
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            crate::settings::init(initial.clone(), dir.path(), cx);
+            appearance::init(
+                AppearanceMode::Dark,
+                ThemeSelection::default(),
+                AccentSelection::default(),
+                SurfacePreference::Opaque,
+                cx,
+            );
+        });
+        let (_page, cx) = cx.add_window_view(|window, cx| {
+            crate::ui_scale::observe_window(window, cx).detach();
+            AppearancePage::new(cx)
+        });
+        cx.update(|window, cx| window.draw(cx).clear());
+        let trigger = cx.debug_bounds("interface-scale").expect("scale trigger");
+        cx.simulate_click(trigger.center(), gpui::Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear());
+        let choice = cx
+            .debug_bounds("interface-scale-option-3")
+            .expect("150% option");
+        cx.simulate_click(choice.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert_eq!(window.ui_zoom(), 1.5);
+            assert_eq!(window.scale_factor(), window.native_scale_factor() * 1.5);
+            let saved = crate::settings::current(cx);
+            assert_eq!(saved.ui_scale, 1.5);
+            assert_eq!(saved.ui_font_size, initial.ui_font_size);
+            assert_eq!(saved.terminal_font_size, initial.terminal_font_size);
+            assert_eq!(saved.code_font_size, initial.code_font_size);
+            assert_eq!(crate::settings::UiSettings::load(dir.path()), saved);
+        });
     }
 
     #[gpui::test]

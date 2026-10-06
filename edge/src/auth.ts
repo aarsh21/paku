@@ -46,6 +46,8 @@ export const verifyToken = async (env: Env, token: string): Promise<Verified | u
     if (at > 0) return { userId: token.slice(0, at), orgId: token.slice(at + 1) };
     return { userId: token };
   }
+  // Empty self-hosting templates must not consult an upstream trust anchor.
+  if (env.AUTH_MODE !== "workos" || !env.WORKOS_CLIENT_ID) return undefined;
   const issuer =
     env.WORKOS_ISSUER ?? `https://api.workos.com/user_management/${env.WORKOS_CLIENT_ID}`;
   const jwksUrl = env.WORKOS_JWKS_URL ?? `https://api.workos.com/sso/jwks/${env.WORKOS_CLIENT_ID}`;

@@ -24,12 +24,12 @@ use gpui::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
-use zeron_doc::{MessagePart, MessageRole, SessionCommandPayload, SessionMessageEntry};
-use zeron_proto::{
+use paku_doc::{MessagePart, MessageRole, SessionCommandPayload, SessionMessageEntry};
+use paku_proto::{
     FileSearchMatch, HarnessId, RunRequest, SandboxLevel, SlashCommand, UserInputAnswer,
     UserInputQuestion, capabilities,
 };
-use zeron_rpc::{RpcError, methods};
+use paku_rpc::{RpcError, methods};
 
 use crate::appshots::{self, CapturedAppshot};
 use crate::attachments::{self, StagedAttachment};
@@ -53,12 +53,12 @@ pub(crate) use chip::{
 // Constants + pure decision logic
 // ---------------------------------------------------------------------------
 
-/// Expanded-mode textarea vertical padding: `pt-4 pb-1` (zeron composer.tsx
+/// Expanded-mode textarea vertical padding: `pt-4 pb-1` (paku composer.tsx
 /// line 578) = 16 + 4.
 pub const TEXTAREA_PAD_V: f32 = 20.0;
 /// The expanded textarea BOX (content + padding) is clamped by the original's
 /// auto-grow effect: `ta.style.height = Math.min(Math.max(scrollHeight, 76),
-/// 260)` (zeron composer.tsx line 235). The 76px floor applies even when
+/// 260)` (paku composer.tsx line 235). The 76px floor applies even when
 /// empty — it's what makes the always-expanded new-chat composer tall.
 pub const TEXTAREA_MIN: f32 = 76.0;
 pub const TEXTAREA_MAX: f32 = 260.0;
@@ -289,7 +289,7 @@ fn input_drag_scroll_delta(
     distance.signum() * (distance.abs() * 0.2).clamp(1.0, line_height)
 }
 
-/// Staged-attachment strip metrics (zeron attachment-ui.tsx AttachmentStrip:
+/// Staged-attachment strip metrics (paku attachment-ui.tsx AttachmentStrip:
 /// `flex flex-wrap gap-2 px-4 pt-3`, `size-14` thumbs).
 pub const STRIP_THUMB: f32 = 56.0;
 pub const STRIP_GAP: f32 = 8.0;
@@ -892,7 +892,7 @@ const MENTION_TOOLTIP_HEIGHT: f32 = 24.0;
 const MENTION_SIDE_PAD: &str = "\u{00A0}";
 /// A private URI scheme keeps file mentions distinguishable from ordinary
 /// Markdown links pasted into the composer.
-use zeron_proto::file_mentions::{FILE_MENTION_SCHEME, local_file_link, local_path_is_safe};
+use paku_proto::file_mentions::{FILE_MENTION_SCHEME, local_file_link, local_path_is_safe};
 
 /// A restorable point in the input's history: text plus where the caret and
 /// selection sat when the edit landed.
@@ -971,7 +971,7 @@ fn dropped_reference(content: &str, range: Range<usize>, link: &str) -> Option<(
 }
 
 fn file_mention_links(text: &str) -> Vec<FileMentionLink> {
-    zeron_proto::file_mentions::file_mention_links(text)
+    paku_proto::file_mentions::file_mention_links(text)
         .into_iter()
         .map(|link| FileMentionLink {
             range: link.range,
@@ -1228,7 +1228,7 @@ impl TextProjection {
     ) -> Self {
         let mut links = file_mention_links(raw);
         links.extend(
-            zeron_proto::invocation::invocation_links(raw)
+            paku_proto::invocation::invocation_links(raw)
                 .into_iter()
                 .map(|(range, invocation)| FileMentionLink {
                     range,
@@ -1247,7 +1247,7 @@ impl TextProjection {
                 }),
         );
         links.extend(
-            zeron_proto::attachment_mentions::attachment_mentions(raw)
+            paku_proto::attachment_mentions::attachment_mentions(raw)
                 .into_iter()
                 .map(|mention| FileMentionLink {
                     range: mention.range,
@@ -1471,9 +1471,9 @@ pub struct SentMentionSpan {
 /// Cheap probe: whether `raw` could hold a file, skill or attachment chip.
 fn has_mention_scheme(raw: &str) -> bool {
     raw.contains(FILE_MENTION_SCHEME)
-        || raw.contains(zeron_proto::invocation::INVOCATION_SCHEME)
-        || raw.contains(zeron_proto::attachment_mentions::IMAGE_MENTION_SCHEME)
-        || raw.contains(zeron_proto::attachment_mentions::ATTACHMENT_MENTION_SCHEME)
+        || raw.contains(paku_proto::invocation::INVOCATION_SCHEME)
+        || raw.contains(paku_proto::attachment_mentions::IMAGE_MENTION_SCHEME)
+        || raw.contains(paku_proto::attachment_mentions::ATTACHMENT_MENTION_SCHEME)
 }
 
 /// Project a sent message's raw Markdown for transcript display: mention links
@@ -1979,7 +1979,7 @@ pub struct ComposerInput {
     /// Raw Markdown → chip display projection from the last layout pass.
     projection: TextProjection,
     syntax_source: String,
-    syntax_spans: Vec<zeron_syntax::HighlightSpan>,
+    syntax_spans: Vec<paku_syntax::HighlightSpan>,
     syntax_task: Option<Task<()>>,
     /// Inline completion preview: painted in faint ink after the text while
     /// the caret sits at the end (palette tab-completion). Owned by the
@@ -2297,7 +2297,7 @@ impl ComposerInput {
             return false;
         }
         let ranges: Vec<Range<usize>> =
-            zeron_proto::attachment_mentions::attachment_mentions(&self.content)
+            paku_proto::attachment_mentions::attachment_mentions(&self.content)
                 .into_iter()
                 .filter(|mention| mention.index == index)
                 .map(|mention| mention.range)
@@ -2704,7 +2704,7 @@ impl ComposerInput {
                         if requesting && input.dictation.phase == crate::dictation::Phase::Listening
                         {
                             tracing::debug!(
-                                target: "zeron_ui::dictation",
+                                target: "paku_ui::dictation",
                                 activation_to_listening_ms = started.elapsed().as_millis(),
                                 "Dictation capture ready"
                             );
@@ -3381,8 +3381,8 @@ impl ComposerInput {
                 continue;
             }
             text.push_str(&self.content[at..link.range.start]);
-            text.push_str(&zeron_proto::invocation::invocation_prompt(
-                &zeron_proto::file_mentions::file_mention_prompt(&self.content[link.range.clone()]),
+            text.push_str(&paku_proto::invocation::invocation_prompt(
+                &paku_proto::file_mentions::file_mention_prompt(&self.content[link.range.clone()]),
             ));
             at = link.range.end;
         }
@@ -3395,9 +3395,9 @@ impl ComposerInput {
             cx.write_to_clipboard(ClipboardItem::new_string_with_json_metadata(
                 text.clone(),
                 serde_json::json!({
-                    "zeronComposerV1": raw,
+                    "pakuComposerV1": raw,
                     "text": text,
-                    "zeronAttachmentScope": self.attachment_scope,
+                    "pakuAttachmentScope": self.attachment_scope,
                 }),
             ));
         } else if self.copies_transcript_selection
@@ -3415,9 +3415,9 @@ impl ComposerInput {
             cx.write_to_clipboard(ClipboardItem::new_string_with_json_metadata(
                 text.clone(),
                 serde_json::json!({
-                    "zeronComposerV1": raw,
+                    "pakuComposerV1": raw,
                     "text": text,
-                    "zeronAttachmentScope": self.attachment_scope,
+                    "pakuAttachmentScope": self.attachment_scope,
                 }),
             ));
 
@@ -3463,16 +3463,16 @@ impl ComposerInput {
                     .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
                 {
                     if value.get("text").and_then(|v| v.as_str()) == Some(text.as_str()) {
-                        if let Some(raw) = value.get("zeronComposerV1").and_then(|v| v.as_str()) {
+                        if let Some(raw) = value.get("pakuComposerV1").and_then(|v| v.as_str()) {
                             // Chip numbers belong to one draft: chips copied from
                             // another chat would name the wrong attachment, so
                             // they paste as their plain labels instead.
                             let from_this_draft = value
-                                .get("zeronAttachmentScope")
+                                .get("pakuAttachmentScope")
                                 .and_then(|v| v.as_str())
                                 .is_some_and(|scope| scope == self.attachment_scope);
                             if from_this_draft
-                                || zeron_proto::attachment_mentions::attachment_mentions(raw)
+                                || paku_proto::attachment_mentions::attachment_mentions(raw)
                                     .is_empty()
                             {
                                 text = raw.to_owned();
@@ -5345,7 +5345,7 @@ pub enum ComposerEvent {
     /// chat, even when the user has selected another chat in the meantime.
     WorktreeSetup {
         chat_id: String,
-        setup_action: Option<zeron_proto::ProjectActionRun>,
+        setup_action: Option<paku_proto::ProjectActionRun>,
         setup_error: Option<String>,
         target_device_id: Option<String>,
     },
@@ -5661,7 +5661,7 @@ fn skill_display_name(name: &str) -> String {
         .join(" ")
 }
 
-/// Commands implemented by Zeron, independently of the provider protocol.
+/// Commands implemented by Paku, independently of the provider protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceCommand {
     Model,
@@ -5681,27 +5681,27 @@ impl WorkspaceCommand {
             (
                 Self::Model,
                 "model",
-                "Zeron: choose agent, model, and reasoning",
+                "Paku: choose agent, model, and reasoning",
                 false,
             ),
-            (Self::New, "new", "Zeron: start a new conversation", false),
+            (Self::New, "new", "Paku: start a new conversation", false),
             (
                 Self::Resume,
                 "resume",
-                "Zeron: search and open conversations",
+                "Paku: search and open conversations",
                 false,
             ),
-            (Self::Settings, "settings", "Zeron: open settings", false),
-            (Self::Diff, "diff", "Zeron: open changes", true),
-            (Self::Files, "files", "Zeron: open project files", true),
-            (Self::Terminal, "terminal", "Zeron: open a terminal", true),
+            (Self::Settings, "settings", "Paku: open settings", false),
+            (Self::Diff, "diff", "Paku: open changes", true),
+            (Self::Files, "files", "Paku: open project files", true),
+            (Self::Terminal, "terminal", "Paku: open a terminal", true),
             (
                 Self::Rename,
                 "rename",
-                "Zeron: rename this conversation",
+                "Paku: rename this conversation",
                 true,
             ),
-            (Self::Stop, "stop", "Zeron: stop the active run", true),
+            (Self::Stop, "stop", "Paku: stop the active run", true),
         ]
     }
 }
@@ -5715,14 +5715,14 @@ fn with_workspace_commands(
         if needs_chat && !in_chat {
             continue;
         }
-        // Keep provider commands intact. Explicit Zeron names remain available
+        // Keep provider commands intact. Explicit Paku names remain available
         // when a provider owns the unqualified name.
         let mut name = name.to_string();
         while rows.iter().any(|row| row.name == name) {
-            name = format!("zeron:{name}");
+            name = format!("paku:{name}");
         }
         rows.push(InvocationCandidate {
-            invocation: zeron_proto::invocation::Invocation::Command { name: name.clone() },
+            invocation: paku_proto::invocation::Invocation::Command { name: name.clone() },
             name,
             description: description.into(),
             input_hint: None,
@@ -5752,17 +5752,17 @@ struct InvocationCandidate {
     name: String,
     description: String,
     input_hint: Option<String>,
-    invocation: zeron_proto::invocation::Invocation,
+    invocation: paku_proto::invocation::Invocation,
 }
 
 fn invocation_insertion(
-    invocation: &zeron_proto::invocation::Invocation,
+    invocation: &paku_proto::invocation::Invocation,
     supported: bool,
 ) -> String {
     if !supported
         && matches!(
             invocation,
-            zeron_proto::invocation::Invocation::Command { .. }
+            paku_proto::invocation::Invocation::Command { .. }
         )
     {
         invocation.prompt_text()
@@ -5773,8 +5773,8 @@ fn invocation_insertion(
 
 fn references_require_update(text: &str, supported: bool) -> bool {
     !supported
-        && (!zeron_proto::invocation::invocation_links(text).is_empty()
-            || !zeron_proto::file_mentions::file_mention_links(text).is_empty())
+        && (!paku_proto::invocation::invocation_links(text).is_empty()
+            || !paku_proto::file_mentions::file_mention_links(text).is_empty())
 }
 
 /// Slash-command completion state: like [`FileMentionState`] but the
@@ -5830,7 +5830,7 @@ fn mention_response_is_current(state: &FileMentionState, request: u64) -> bool {
 fn mention_error_message(err: &RpcError) -> SharedString {
     match err {
         RpcError::UnknownMethod(_) => {
-            "The session's device runs an older zeron — update it to search its files".into()
+            "The session's device runs an older paku — update it to search its files".into()
         }
         RpcError::Transport(_) | RpcError::Closed => "The session's device is unreachable".into(),
         RpcError::BadParams(_) | RpcError::Failed(_) => "File search failed".into(),
@@ -5840,9 +5840,9 @@ fn mention_error_message(err: &RpcError) -> SharedString {
 /// A failed command discovery, translated for the popup.
 fn invocation_candidates(
     commands: Vec<SlashCommand>,
-    skills: Vec<zeron_proto::invocation::Skill>,
+    skills: Vec<paku_proto::invocation::Skill>,
 ) -> Vec<InvocationCandidate> {
-    use zeron_proto::invocation::{
+    use paku_proto::invocation::{
         valid_invocation_name, valid_skill_command_name, valid_skill_path,
     };
     // A remote engine may use an older catalog decoder. Every visible choice
@@ -5875,7 +5875,7 @@ fn invocation_candidates(
             input_hint: c.input_hint,
             name: c.name.clone(),
             description: c.description,
-            invocation: zeron_proto::invocation::Invocation::Command { name: c.name },
+            invocation: paku_proto::invocation::Invocation::Command { name: c.name },
         })
         .chain(
             skills
@@ -5885,12 +5885,12 @@ fn invocation_candidates(
                     workspace_command: None,
                     input_hint: None,
                     name: s.name.clone(),
-                    description: if zeron_proto::invocation::native_skill_identity(&s.path) {
+                    description: if paku_proto::invocation::native_skill_identity(&s.path) {
                         s.description.clone()
                     } else {
                         format!("{} — {}", s.description, s.path)
                     },
-                    invocation: zeron_proto::invocation::Invocation::Skill {
+                    invocation: paku_proto::invocation::Invocation::Skill {
                         name: s.name,
                         path: s.path,
                         command: s.command,
@@ -5902,7 +5902,7 @@ fn invocation_candidates(
 
 fn merge_invocation_results(
     commands: Result<Vec<SlashCommand>, RpcError>,
-    skills: Result<Option<Vec<zeron_proto::invocation::Skill>>, RpcError>,
+    skills: Result<Option<Vec<paku_proto::invocation::Skill>>, RpcError>,
     skill_only: bool,
 ) -> Result<(Vec<InvocationCandidate>, bool, Option<SharedString>), RpcError> {
     match (commands, skills) {
@@ -5932,9 +5932,9 @@ fn slash_error_message(err: &RpcError, skill: bool) -> SharedString {
     match err {
         RpcError::UnknownMethod(_) => {
             if skill {
-                "Skills require an updated engine on the selected device. Restart that device’s Zeron after updating.".into()
+                "Skills require an updated engine on the selected device. Restart that device’s Paku after updating.".into()
             } else {
-                "Commands require an updated engine on the selected device. Restart that device’s Zeron after updating.".into()
+                "Commands require an updated engine on the selected device. Restart that device’s Paku after updating.".into()
             }
         }
         RpcError::Transport(_) | RpcError::Closed => "The session's device is unreachable".into(),
@@ -5977,7 +5977,7 @@ pub struct Composer {
     /// gets focus back on close.
     preview_focus: FocusHandle,
     /// Focus grab deferred to the next render (open sites don't all have a
-    /// `Window` — the `ZERON_ATTACH_PREVIEW` boot knob opens in `new`).
+    /// `Window` — the `PAKU_ATTACH_PREVIEW` boot knob opens in `new`).
     preview_focus_pending: bool,
     /// In-flight file-picker prompt (paperclip).
     picker_task: Option<Task<()>>,
@@ -6373,9 +6373,9 @@ impl Composer {
             voice_tween: VoiceTween::default(),
         };
         // Dev knob: pre-stage attachments (drop/paste can't be synthesized on
-        // a rig) — `ZERON_ATTACH=/path/a.png[,/path/b.png]`, and
-        // `ZERON_ATTACH_PREVIEW=1` boots with the first one's lightbox open.
-        if let Ok(spec) = std::env::var("ZERON_ATTACH") {
+        // a rig) — `PAKU_ATTACH=/path/a.png[,/path/b.png]`, and
+        // `PAKU_ATTACH_PREVIEW=1` boots with the first one's lightbox open.
+        if let Ok(spec) = std::env::var("PAKU_ATTACH") {
             let staged: Vec<StagedAttachment> = spec
                 .split(',')
                 .filter(|s| !s.trim().is_empty())
@@ -6383,13 +6383,13 @@ impl Composer {
                     match attachments::stage_file(std::path::Path::new(path.trim())) {
                         Ok(att) => Some(att),
                         Err(err) => {
-                            tracing::warn!(%path, error = %err, "ZERON_ATTACH stage failed");
+                            tracing::warn!(%path, error = %err, "PAKU_ATTACH stage failed");
                             None
                         }
                     }
                 })
                 .collect();
-            if std::env::var("ZERON_ATTACH_PREVIEW").is_ok_and(|v| v == "1")
+            if std::env::var("PAKU_ATTACH_PREVIEW").is_ok_and(|v| v == "1")
                 && let Some(first) = staged.first()
             {
                 composer.preview = first
@@ -6405,7 +6405,7 @@ impl Composer {
         composer
     }
 
-    /// Capture-knob passthrough (`ZERON_OPEN_DIALOG=model`): open the
+    /// Capture-knob passthrough (`PAKU_OPEN_DIALOG=model`): open the
     /// combined harness/model menu.
     pub fn open_model_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pickers
@@ -6680,7 +6680,7 @@ impl Composer {
             .flatten()
             .filter_map(|att| att.mention)
             .max();
-        let mentioned = zeron_proto::attachment_mentions::attachment_mention_indices(text)
+        let mentioned = paku_proto::attachment_mentions::attachment_mention_indices(text)
             .into_iter()
             .max();
         let draft = self.attachment_drafts.entry(key.to_string()).or_default();
@@ -6714,14 +6714,14 @@ impl Composer {
             let file_name = match att.image() {
                 Some(image) => {
                     att.name = attachments::ensure_extension(
-                        &zeron_proto::attachment_mentions::image_label(index),
+                        &paku_proto::attachment_mentions::image_label(index),
                         image.format,
                     );
                     None
                 }
                 None => Some(att.name.as_str()),
             };
-            links.push(zeron_proto::attachment_mentions::attachment_mention_link(
+            links.push(paku_proto::attachment_mentions::attachment_mention_link(
                 index, file_name,
             ));
             indices.push(index);
@@ -6760,7 +6760,7 @@ impl Composer {
     /// returns. Attachments the prompt never mentions are left alone.
     fn reconcile_attachment_mentions(&mut self, cx: &mut Context<Self>) {
         if self.wizard.is_none() && !self.queue_edit_finishing {
-            let mentioned = zeron_proto::attachment_mentions::attachment_mention_indices(
+            let mentioned = paku_proto::attachment_mentions::attachment_mention_indices(
                 self.input.read(cx).text(),
             );
             let is_mentioned =
@@ -7436,7 +7436,7 @@ impl Composer {
         }
         let harness = self.pickers.read(cx).resolved(cx).harness;
         let preferences =
-            crate::settings::current(cx).skill_completion(harness.unwrap_or(HarnessId::Codex));
+            crate::settings::current(cx).skill_completion(harness.unwrap_or(HarnessId::Pi));
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
@@ -7463,7 +7463,7 @@ impl Composer {
                         .await
                         .ok()
                         .and_then(|v| {
-                            serde_json::from_value::<Option<Vec<zeron_proto::invocation::Skill>>>(v)
+                            serde_json::from_value::<Option<Vec<paku_proto::invocation::Skill>>>(v)
                                 .ok()
                         })
                         .flatten()
@@ -7528,8 +7528,8 @@ impl Composer {
             }
             this.update(cx, |this, cx| {
                 let harness = this.pickers.read(cx).resolved(cx).harness;
-                let preferences = crate::settings::current(cx)
-                    .skill_completion(harness.unwrap_or(HarnessId::Codex));
+                let preferences =
+                    crate::settings::current(cx).skill_completion(harness.unwrap_or(HarnessId::Pi));
                 let current = format!(
                     "{}:{}:{preferences:?}",
                     this.completion_connection_context(cx),
@@ -7734,7 +7734,7 @@ impl Composer {
             .filter_map(|att| {
                 let index = att.mention?;
                 let label = if att.image().is_some() {
-                    zeron_proto::attachment_mentions::image_label(index)
+                    paku_proto::attachment_mentions::image_label(index)
                 } else {
                     att.name.clone()
                 };
@@ -7758,7 +7758,7 @@ impl Composer {
             return;
         };
         if let Some(row) = rows.get(active) {
-            let link = zeron_proto::attachment_mentions::attachment_mention_link(
+            let link = paku_proto::attachment_mentions::attachment_mention_link(
                 row.index,
                 row.image.is_none().then_some(row.label.as_str()),
             );
@@ -7942,7 +7942,7 @@ impl Composer {
     fn update_slash(&mut self, text: &str, cursor: usize, cx: &mut Context<Self>) {
         let harness = self.pickers.read(cx).resolved(cx).harness;
         let preferences =
-            crate::settings::current(cx).skill_completion(harness.unwrap_or(HarnessId::Codex));
+            crate::settings::current(cx).skill_completion(harness.unwrap_or(HarnessId::Pi));
         let (token, skill, include_skills, commands_allowed) =
             completion_trigger(text, cursor, preferences);
         if token.is_none() {
@@ -8045,7 +8045,7 @@ impl Composer {
                         .client()
                         .call(methods::LIST_SKILLS, params.clone())
                         .await?;
-                    serde_json::from_value::<Option<Vec<zeron_proto::invocation::Skill>>>(value)
+                    serde_json::from_value::<Option<Vec<paku_proto::invocation::Skill>>>(value)
                         .map_err(|e| RpcError::Failed(e.to_string()))
                 };
                 let (commands, skills) = futures::join!(commands, skills);
@@ -8253,7 +8253,7 @@ impl Composer {
                                 "This agent does not advertise skills"
                             }
                         } else if !crate::settings::current(cx)
-                            .skill_completion(self.slash.harness.unwrap_or(HarnessId::Codex))
+                            .skill_completion(self.slash.harness.unwrap_or(HarnessId::Pi))
                             .separate_from_slash
                         {
                             "No commands or skills available"
@@ -8264,7 +8264,7 @@ impl Composer {
                         if self.slash.skill {
                             "No matching skills"
                         } else if !crate::settings::current(cx)
-                            .skill_completion(self.slash.harness.unwrap_or(HarnessId::Codex))
+                            .skill_completion(self.slash.harness.unwrap_or(HarnessId::Pi))
                             .separate_from_slash
                         {
                             "No matching commands or skills"
@@ -8405,7 +8405,7 @@ impl Composer {
                 self.appshots.insert(self.current_key.clone(), appshots);
                 // The edit's chip numbers would collide with the draft's: its
                 // chips become their labels and its attachments plain tiles.
-                let edited = zeron_proto::attachment_mentions::attachment_mention_prompt(
+                let edited = paku_proto::attachment_mentions::attachment_mention_prompt(
                     self.input.read(cx).text(),
                 );
                 let text = [draft, edited]
@@ -8592,7 +8592,7 @@ impl Composer {
     /// Check before consuming drafts, attachments, or an edited queue row.
     pub(crate) fn check_reference_delivery(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
         if references_require_update(text, self.reference_delivery_supported(cx)) {
-            self.failure = Some("Update the selected device’s Zeron to send file, command, or skill references. Your draft is preserved.".into());
+            self.failure = Some("Update the selected device’s Paku to send file, command, or skill references. Your draft is preserved.".into());
             self.failure_key = Some(self.current_key.clone());
             cx.notify();
             return false;
@@ -8850,7 +8850,7 @@ impl Composer {
             .iter()
             .filter_map(|att| att.mention)
             .collect();
-        let text = zeron_proto::attachment_mentions::demote_unattached_mentions(&text, &attached);
+        let text = paku_proto::attachment_mentions::demote_unattached_mentions(&text, &attached);
         let text = crate::comments::with_comments(&text, &comments);
         self.preview = None;
         let message_id = uuid::Uuid::new_v4().to_string();
@@ -8958,7 +8958,7 @@ impl Composer {
         // so the doc frame dedups it away).
         let echo = SessionMessageEntry {
             id: message_id.clone(),
-            role: zeron_doc::MessageRole::User,
+            role: paku_doc::MessageRole::User,
             parts: vec![MessagePart::Text {
                 id: "t0".into(),
                 text: echo_text.clone(),
@@ -9124,7 +9124,7 @@ impl Composer {
                     if should_publish_optimistic_echo(queue) {
                         let refreshed = SessionMessageEntry {
                             id: message_id.clone(),
-                            role: zeron_doc::MessageRole::User,
+                            role: paku_doc::MessageRole::User,
                             parts: vec![MessagePart::Text {
                                 id: "t0".into(),
                                 text: content.clone(),
@@ -9168,7 +9168,7 @@ impl Composer {
                 // a blocking CreateWorktree relay RPC here: the RPC had no
                 // timeout, so a lost relay frame wedged the send on "Sending…"
                 // forever while the session ran remotely anyway (2026-08-18).
-                let mut run_worktree: Option<zeron_proto::WorktreeSpec> = None;
+                let mut run_worktree: Option<paku_proto::WorktreeSpec> = None;
                 // The picked ref rides createChat so the session footer names
                 // it from the first frame (it read "Select ref" until the
                 // host's diff reconciler got around to stamping the branch).
@@ -9185,7 +9185,7 @@ impl Composer {
                         }
                         crate::pickers::CheckoutPlan::NewWorktree { base } => {
                             // Footer shows the base until the host stamps the
-                            // actual zeron/<name> branch post-creation. cwd
+                            // actual paku/<name> branch post-creation. cwd
                             // stays the repo folder — an old host that doesn't
                             // know the spec degrades to the main checkout
                             // instead of failing the run.
@@ -9201,7 +9201,7 @@ impl Composer {
                                 // current checkout state.
                                 let base =
                                     base.clone().unwrap_or_else(|| "HEAD".to_string());
-                                run_worktree = Some(zeron_proto::WorktreeSpec {
+                                run_worktree = Some(paku_proto::WorktreeSpec {
                                     repo_path: repo_path.clone(),
                                     base,
                                     space_id: space_id.clone(),
@@ -9731,7 +9731,7 @@ impl Composer {
 
     // ---- render pieces ----
 
-    /// The agent-asked-a-question panel (zeron question-panel.tsx), rendered in
+    /// The agent-asked-a-question panel (paku question-panel.tsx), rendered in
     /// place of the composer: the same floating-pill chrome (`rounded-[26px]
     /// border-white/[0.08] bg-white/[0.03] shadow-xl`), uppercase header +
     /// "1/3" counter chip, option rows with number kbd chips, a free-text
@@ -9752,7 +9752,7 @@ impl Composer {
 
         let options = question.options.iter().enumerate().map(|(ix, label)| {
             // Selection reads on the row only while no typed override exists
-            // (typed answers win — zeron question-panel.tsx `isSel`).
+            // (typed answers win — paku question-panel.tsx `isSel`).
             let picked = wizard.is_picked(ix) && typed_empty;
             div()
                 .id(("wizard-option", ix))
@@ -9769,7 +9769,7 @@ impl Composer {
                 } else {
                     gpui::transparent_black()
                 })
-                // zeron question-panel.tsx option rows: `transition-colors`.
+                // paku question-panel.tsx option rows: `transition-colors`.
                 .bg(if picked {
                     crate::theme::ink(0.09)
                 } else {
@@ -10384,7 +10384,7 @@ impl Composer {
         let active = self.input.read(cx).dictation.phase.active();
         let live = frame.mode == waveform::Mode::Live && active;
         let clock = frame.elapsed.map(|elapsed| {
-            let limit = Duration::from_secs(zeron_voice::MAX_SECONDS as u64);
+            let limit = Duration::from_secs(paku_voice::MAX_SECONDS as u64);
             div()
                 .flex_none()
                 .font_family(theme.font_mono.clone())
@@ -10458,7 +10458,7 @@ impl Composer {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let theme = Theme::of(cx);
-        // Zeron composer-actions.tsx: a size-7 filled circle — up-arrow to
+        // Paku composer-actions.tsx: a size-7 filled circle — up-arrow to
         // send/queue, a dark rounded square on the same light circle to stop.
         match mode {
             SendButtonMode::Stop => div()
@@ -10726,7 +10726,7 @@ impl Render for Composer {
         // UP FRONT that a send will queue (a durable local write delivered on
         // reconnect) instead of letting the button imply instant delivery.
         let queue_notice: Option<(SharedString, bool)> = {
-            use zeron_proto::ConnectivityState as S;
+            use paku_proto::ConnectivityState as S;
             let state = self.state.read(cx);
             let degraded = match state.selected_chat.as_deref() {
                 Some(id) => state.chat_delivery_degraded(id),
@@ -11054,7 +11054,7 @@ impl Render for Composer {
             .justify_center()
             .rounded_full()
             .cursor_pointer()
-            // zeron composer-actions.tsx attach: `transition-colors`.
+            // paku composer-actions.tsx attach: `transition-colors`.
             .bg(motion::hover_blend(
                 &attach_hover_key,
                 gpui::transparent_black(),
@@ -12071,7 +12071,7 @@ mod tests {
                 assert_eq!(
                     input.read(cx).text(),
                     if accepted {
-                        "Keep this draft [Image 1](zeron-image:1) "
+                        "Keep this draft [Image 1](paku-image:1) "
                     } else {
                         "Keep this draft"
                     }
@@ -12248,7 +12248,7 @@ mod tests {
                     input_hint: Some("model id".into()),
                 },
                 SlashCommand {
-                    name: "zeron:model".into(),
+                    name: "paku:model".into(),
                     description: "Plugin command".into(),
                     input_hint: None,
                 },
@@ -12260,9 +12260,9 @@ mod tests {
         assert!(rows[0].workspace_command.is_none());
         assert_eq!(rows[0].input_hint.as_deref(), Some("model id"));
         assert_eq!(workspace_command_for_text("/model", &rows), None);
-        assert_eq!(workspace_command_for_text("/zeron:model", &rows), None);
+        assert_eq!(workspace_command_for_text("/paku:model", &rows), None);
         assert_eq!(
-            workspace_command_for_text("/zeron:zeron:model", &rows),
+            workspace_command_for_text("/paku:paku:model", &rows),
             Some(WorkspaceCommand::Model)
         );
         assert_eq!(with_workspace_commands(rows, true).len(), 11);
@@ -12362,13 +12362,13 @@ mod tests {
                         assert_eq!(input.text(), draft, "action removal is undoable");
                     });
                 }
-                let skill = zeron_proto::invocation::Invocation::Skill {
+                let skill = paku_proto::invocation::Invocation::Skill {
                     name: "review".into(),
                     path: "/repo/SKILL.md".into(),
                     command: None,
                 };
                 for invocation in [
-                    zeron_proto::invocation::Invocation::Command {
+                    paku_proto::invocation::Invocation::Command {
                         name: "review".into(),
                     },
                     skill,
@@ -12395,7 +12395,7 @@ mod tests {
                         format!(
                             "café {} after",
                             match &invocation {
-                                zeron_proto::invocation::Invocation::Command { .. } =>
+                                paku_proto::invocation::Invocation::Command { .. } =>
                                     "/review".to_string(),
                                 _ => invocation.link(),
                             }
@@ -12442,7 +12442,7 @@ mod tests {
             .build()
             .unwrap();
         let _guard = runtime.enter();
-        let skill = zeron_proto::invocation::Invocation::Skill {
+        let skill = paku_proto::invocation::Invocation::Skill {
             name: "review".into(),
             path: "/skills/review/SKILL.md".into(),
             command: None,
@@ -12462,7 +12462,7 @@ mod tests {
                 let state = cx.new(|_| AppState::new());
                 state.update(cx, |state, _| {
                     state.set_test_engine(crate::state::EngineHandle::from_test_client(
-                        zeron_rpc::RpcClient::new(out, inbound),
+                        paku_rpc::RpcClient::new(out, inbound),
                     ));
                     state.selected_chat = Some("literal-draft".into());
                 });
@@ -12483,7 +12483,7 @@ mod tests {
                 let mut submitted = None;
                 let mut discarded = false;
                 while let Ok(frame) = requests.try_recv() {
-                    let frame: zeron_rpc::ClientFrame = serde_json::from_str(&frame).unwrap();
+                    let frame: paku_rpc::ClientFrame = serde_json::from_str(&frame).unwrap();
                     if frame.method.as_deref() == Some(methods::FINISH_QUEUED_MESSAGE_EDIT) {
                         discarded = frame.params["action"] == "discard";
                         submitted = frame.params["text"].as_str().map(str::to_owned);
@@ -12503,8 +12503,8 @@ mod tests {
                 } else {
                     let submitted = submitted.expect("submission must reach the engine RPC");
                     assert_eq!(submitted, raw);
-                    assert!(zeron_proto::invocation::leading_command(&submitted).is_none());
-                    assert!(zeron_proto::invocation::invocation_links(&submitted).is_empty());
+                    assert!(paku_proto::invocation::leading_command(&submitted).is_none());
+                    assert!(paku_proto::invocation::invocation_links(&submitted).is_empty());
                 }
             }
         }
@@ -12526,7 +12526,7 @@ mod tests {
         let state = cx.new(|_| AppState::new());
         state.update(cx, |state, _| {
             state.set_test_engine(crate::state::EngineHandle::from_test_client(
-                zeron_rpc::RpcClient::new(out, inbound),
+                paku_rpc::RpcClient::new(out, inbound),
             ));
             state.selected_chat = Some("c".into());
             // A send in flight reads as Working — the double-Enter window.
@@ -12551,13 +12551,13 @@ mod tests {
         let raw = format!(
             "{} {} {}",
             local_file_link("src/main.rs", false),
-            zeron_proto::invocation::Invocation::Skill {
+            paku_proto::invocation::Invocation::Skill {
                 command: None,
                 name: "review".into(),
                 path: "/repo/SKILL.md".into(),
             }
             .link(),
-            zeron_proto::invocation::Invocation::Command {
+            paku_proto::invocation::Invocation::Command {
                 name: "help".into()
             }
             .link(),
@@ -12603,7 +12603,7 @@ mod tests {
         let (_dir, handle) = composer_focus_window(cx);
         handle.update(cx, |composer, window, cx| {
             let file = local_file_link("src/composer.rs", false);
-            let skill = zeron_proto::invocation::Invocation::Skill { name: "review-changes".into(), path: "/repo/SKILL.md".into(), command: None }.link();
+            let skill = paku_proto::invocation::Invocation::Skill { name: "review-changes".into(), path: "/repo/SKILL.md".into(), command: None }.link();
             let raw = format!("Review {file} with {skill} and enough trailing prose to need more than one additional row of wrapping.");
             composer.input.update(cx, |input, cx| {
                 input.set_text(&raw, cx);
@@ -12922,7 +12922,7 @@ mod tests {
         let _guard = runtime.enter();
         let directory = tempfile::tempdir().unwrap();
         crate::settings::composer::ComposerDefaults {
-            harness: Some(HarnessId::Codex),
+            harness: Some(HarnessId::Pi),
             ..Default::default()
         }
         .save(directory.path())
@@ -12943,7 +12943,7 @@ mod tests {
                     .unwrap(),
                 ];
                 state.set_test_engine(crate::state::EngineHandle::from_test_client(
-                    zeron_rpc::RpcClient::new(out, inbound),
+                    paku_rpc::RpcClient::new(out, inbound),
                 ));
             });
             let composer = cx.new(|cx| Composer::new(state.clone(), cx));
@@ -12962,7 +12962,7 @@ mod tests {
             }
             let mut methods = Vec::new();
             while let Ok(frame) = requests.try_recv() {
-                let frame: zeron_rpc::ClientFrame = serde_json::from_str(&frame).unwrap();
+                let frame: paku_rpc::ClientFrame = serde_json::from_str(&frame).unwrap();
                 assert_eq!(frame.params["targetDeviceId"], "peer");
                 assert!(frame.params.get("cwd").is_none());
                 let value = match frame.method.as_deref() {
@@ -12977,7 +12977,7 @@ mod tests {
                 methods.push(frame.method.unwrap());
                 replies
                     .try_send(
-                        serde_json::to_string(&zeron_rpc::ServerFrame {
+                        serde_json::to_string(&paku_rpc::ServerFrame {
                             id: frame.id,
                             ok: Some(value),
                             ..Default::default()
@@ -12997,7 +12997,7 @@ mod tests {
                 if change_target {
                     assert_eq!(text, raw);
                 } else {
-                    assert_eq!(zeron_proto::invocation::invocation_links(text).len(), 2);
+                    assert_eq!(paku_proto::invocation::invocation_links(text).len(), 2);
                     assert!(text.ends_with(" @README.md"));
                 }
             });
@@ -13025,18 +13025,18 @@ mod tests {
                 serde_json::from_value(serde_json::json!({
                     "id": "main", "deviceId": "local", "cwd": "/tmp/main",
                     "archived": false, "createdAt": chrono::Utc::now(),
-                    "config": { "harness": "codex", "sandbox": "workspace-write" },
+                    "config": { "harness": "pi", "sandbox": "workspace-write" },
                 }))
                 .unwrap(),
             ];
             state.set_test_engine(crate::state::EngineHandle::from_test_client(
-                zeron_rpc::RpcClient::new(out, inbound),
+                paku_rpc::RpcClient::new(out, inbound),
             ));
         });
-        let chat: zeron_proto::Chat = serde_json::from_value(serde_json::json!({
+        let chat: paku_proto::Chat = serde_json::from_value(serde_json::json!({
             "id": "side", "parentChatId": "main", "deviceId": "local", "cwd": "/tmp/main",
             "archived": false, "createdAt": chrono::Utc::now(),
-            "config": { "harness": "codex", "model": "child-model", "reasoning": "low",
+            "config": { "harness": "pi", "model": "child-model", "reasoning": "low",
                 "sandbox": "workspace-write" },
         }))
         .unwrap();
@@ -13044,11 +13044,11 @@ mod tests {
         let mut drain = || {
             let mut frames = Vec::new();
             while let Ok(frame) = requests.try_recv() {
-                frames.push(serde_json::from_str::<zeron_rpc::ClientFrame>(&frame).unwrap());
+                frames.push(serde_json::from_str::<paku_rpc::ClientFrame>(&frame).unwrap());
             }
             frames
         };
-        let touches_side = |frame: &zeron_rpc::ClientFrame| frame.params["chatId"] == "side";
+        let touches_side = |frame: &paku_rpc::ClientFrame| frame.params["chatId"] == "side";
         cx.run_until_parked();
         assert!(!drain().iter().any(touches_side));
 
@@ -13062,7 +13062,7 @@ mod tests {
                 state.selected_chat_row().and_then(|c| c.config.clone())
             })
             .unwrap();
-        for harness in [HarnessId::ClaudeCode, HarnessId::Codex] {
+        for harness in [HarnessId::Mock, HarnessId::Pi] {
             side.update(cx, |state, cx| {
                 let mut config = inherited.clone();
                 config.harness = harness;
@@ -13071,7 +13071,7 @@ mod tests {
             });
             cx.run_until_parked();
             for trigger in ["/", "$", "@"] {
-                if trigger == "$" && harness != HarnessId::Codex {
+                if trigger == "$" && harness != HarnessId::Pi {
                     continue;
                 }
                 composer.update(cx, |composer, cx| {
@@ -13111,7 +13111,7 @@ mod tests {
                     discovery.push(frame.method.clone().unwrap());
                     replies
                         .try_send(
-                            serde_json::to_string(&zeron_rpc::ServerFrame {
+                            serde_json::to_string(&paku_rpc::ServerFrame {
                                 id: frame.id,
                                 ok: Some(value),
                                 ..Default::default()
@@ -13164,11 +13164,11 @@ mod tests {
         assert_eq!(create.params["op"], "createChat");
         assert_eq!(create.params["parentChatId"], "main");
         assert_eq!(create.params["cwd"], "/tmp/main");
-        assert_eq!(create.params["config"]["harness"], "codex");
+        assert_eq!(create.params["config"]["harness"], "pi");
         assert_eq!(create.params["config"]["model"], "child-model");
         replies
             .try_send(
-                serde_json::to_string(&zeron_rpc::ServerFrame {
+                serde_json::to_string(&paku_rpc::ServerFrame {
                     id: create.id,
                     ok: Some(serde_json::json!({})),
                     ..Default::default()
@@ -13284,12 +13284,12 @@ mod tests {
     }
 
     #[gpui::test]
-    fn clipboard_is_readable_outside_zeron_and_lossless_inside(cx: &mut gpui::TestAppContext) {
+    fn clipboard_is_readable_outside_paku_and_lossless_inside(cx: &mut gpui::TestAppContext) {
         with_composer_input(cx, |input, window, cx| {
             let raw = format!(
                 "**Check** {} with {}",
                 local_file_link("src/café.rs", false),
-                zeron_proto::invocation::Invocation::Skill {
+                paku_proto::invocation::Invocation::Skill {
                     name: "review".into(),
                     path: "/repo/SKILL.md".into(),
                     command: None
@@ -13430,7 +13430,7 @@ mod tests {
                 assert_eq!(input.text(), raw);
                 let source = raw.replace("@src", "$review");
                 input.set_text(&source, cx);
-                let skill = zeron_proto::invocation::Invocation::Skill {
+                let skill = paku_proto::invocation::Invocation::Skill {
                     name: "review".into(),
                     path: "/repo/SKILL.md".into(),
                     command: None,
@@ -13559,7 +13559,7 @@ mod tests {
 
     #[test]
     fn rich_projection_keeps_unicode_offsets_and_atomic_invocations() {
-        let invocation = zeron_proto::invocation::Invocation::Skill {
+        let invocation = paku_proto::invocation::Invocation::Skill {
             command: None,
             name: "bla-bla:bla-bla".into(),
             path: "/repo/SKILL.md".into(),
@@ -13876,7 +13876,7 @@ mod tests {
         let state = cx.new(|_| AppState::new());
         state.update(cx, |state, _| {
             state.set_test_engine(crate::state::EngineHandle::from_test_client(
-                zeron_rpc::RpcClient::new(out, inbound),
+                paku_rpc::RpcClient::new(out, inbound),
             ));
             state.chats = crate::settings::SKILL_COMPLETION_HARNESSES
                 .iter()
@@ -13910,7 +13910,7 @@ mod tests {
             cx.run_until_parked();
             let mut batch = Vec::new();
             while let Ok(frame) = requests.try_recv() {
-                let frame: zeron_rpc::ClientFrame = serde_json::from_str(&frame).unwrap();
+                let frame: paku_rpc::ClientFrame = serde_json::from_str(&frame).unwrap();
                 if matches!(
                     frame.method.as_deref(),
                     Some(methods::LIST_COMMANDS | methods::LIST_SKILLS)
@@ -13935,7 +13935,7 @@ mod tests {
         cx.update(|cx| {
             crate::settings::update(crate::settings::SavePolicy::Immediate, cx, |settings| {
                 settings.skill_completion_by_harness.insert(
-                    HarnessId::Opencode,
+                    HarnessId::Pi,
                     crate::settings::SkillCompletionSettings {
                         dollar: true,
                         separate_from_slash: true,
@@ -13946,7 +13946,7 @@ mod tests {
         cx.run_until_parked();
         let mut current = Vec::new();
         while let Ok(frame) = requests.try_recv() {
-            let frame: zeron_rpc::ClientFrame = serde_json::from_str(&frame).unwrap();
+            let frame: paku_rpc::ClientFrame = serde_json::from_str(&frame).unwrap();
             if matches!(
                 frame.method.as_deref(),
                 Some(methods::LIST_COMMANDS | methods::LIST_SKILLS)
@@ -13956,7 +13956,7 @@ mod tests {
             }
         }
         assert_eq!(current.len(), 2);
-        let respond = |frames: Vec<zeron_rpc::ClientFrame>, name: &str| {
+        let respond = |frames: Vec<paku_rpc::ClientFrame>, name: &str| {
             for frame in frames {
                 let value = if frame.method.as_deref() == Some(methods::LIST_COMMANDS) {
                     serde_json::json!([{ "name": name, "description": "Provider command" }])
@@ -13965,7 +13965,7 @@ mod tests {
                 };
                 replies
                     .try_send(
-                        serde_json::to_string(&zeron_rpc::ServerFrame {
+                        serde_json::to_string(&paku_rpc::ServerFrame {
                             id: frame.id,
                             ok: Some(value),
                             ..Default::default()
@@ -14003,7 +14003,7 @@ mod tests {
         cx.run_until_parked();
         composer.read_with(cx, |composer, _| {
             assert_eq!(visible_names(composer), current_names);
-            assert_eq!(composer.slash.harness, Some(HarnessId::Opencode));
+            assert_eq!(composer.slash.harness, Some(HarnessId::Pi));
         });
 
         // Acceptance, ordinary prose and changing trigger characters must all
@@ -14012,7 +14012,7 @@ mod tests {
         cx.run_until_parked();
         let mut skill_requests = Vec::new();
         while let Ok(frame) = requests.try_recv() {
-            let frame: zeron_rpc::ClientFrame = serde_json::from_str(&frame).unwrap();
+            let frame: paku_rpc::ClientFrame = serde_json::from_str(&frame).unwrap();
             if matches!(
                 frame.method.as_deref(),
                 Some(methods::LIST_COMMANDS | methods::LIST_SKILLS)
@@ -14042,7 +14042,7 @@ mod tests {
             cx.run_until_parked();
             let mut refresh = Vec::new();
             while let Ok(frame) = requests.try_recv() {
-                let frame: zeron_rpc::ClientFrame = serde_json::from_str(&frame).unwrap();
+                let frame: paku_rpc::ClientFrame = serde_json::from_str(&frame).unwrap();
                 if matches!(
                     frame.method.as_deref(),
                     Some(methods::LIST_COMMANDS | methods::LIST_SKILLS)
@@ -14105,7 +14105,7 @@ mod tests {
                 let (_incoming, inbound) = tokio::sync::mpsc::channel(4);
                 composer.state.update(cx, |state, _| {
                     state.set_test_engine(crate::state::EngineHandle::from_test_client(
-                        zeron_rpc::RpcClient::new(out, inbound),
+                        paku_rpc::RpcClient::new(out, inbound),
                     ))
                 });
                 assert_ne!(composer.completion_connection_context(cx), context);
@@ -14166,7 +14166,7 @@ mod tests {
             input.enable_mentions();
             for reference in [
                 local_file_link("src/a.rs", false),
-                zeron_proto::invocation::Invocation::Command {
+                paku_proto::invocation::Invocation::Command {
                     name: "review".into(),
                 }
                 .link(),
@@ -14294,7 +14294,7 @@ mod tests {
             let after_link = format!("[label](url) ({prefix}review");
             assert!(token(&after_link, after_link.len()).is_some());
         }
-        let canonical = zeron_proto::invocation::Invocation::Command {
+        let canonical = paku_proto::invocation::Invocation::Command {
             name: "review".into(),
         }
         .link();
@@ -14408,7 +14408,7 @@ mod tests {
 
     #[test]
     fn legacy_host_commands_remain_literal_and_saved_references_need_an_update() {
-        use zeron_proto::invocation::Invocation;
+        use paku_proto::invocation::Invocation;
         let command = Invocation::Command {
             name: "compact".into(),
         };
@@ -14442,7 +14442,7 @@ mod tests {
         let (_dir, handle) = composer_focus_window(cx);
         handle
             .update(cx, |composer, _, cx| {
-                let draft = zeron_proto::invocation::Invocation::Command {
+                let draft = paku_proto::invocation::Invocation::Command {
                     name: "compact".into(),
                 }
                 .link();
@@ -14495,7 +14495,7 @@ mod tests {
             description: String::new(),
             input_hint: None,
         };
-        let skill = zeron_proto::invocation::Skill {
+        let skill = paku_proto::invocation::Skill {
             command: None,
             name: "review".into(),
             path: "/repo/SKILL.md".into(),
@@ -14590,7 +14590,7 @@ mod tests {
 
     #[test]
     fn every_harness_catalog_only_offers_round_trippable_references() {
-        use zeron_proto::invocation::{Skill, SkillCommand, invocation_links};
+        use paku_proto::invocation::{Skill, SkillCommand, invocation_links};
         for (harness, _) in crate::settings::SKILL_COMPLETION_HARNESSES {
             let commands = ["review", "bad\ncommand", "two words"]
                 .into_iter()
@@ -14635,7 +14635,7 @@ mod tests {
 
     #[test]
     fn separated_native_skills_are_not_left_in_the_command_catalog() {
-        use zeron_proto::invocation::{Skill, SkillCommand};
+        use paku_proto::invocation::{Skill, SkillCommand};
         for (harness, _) in crate::settings::SKILL_COMPLETION_HARNESSES {
             let commands = vec![
                 SlashCommand {
@@ -14674,7 +14674,7 @@ mod tests {
 
     #[test]
     fn combined_invocations_preserve_skill_identity_and_command_collisions() {
-        use zeron_proto::invocation::{Invocation, Skill};
+        use paku_proto::invocation::{Invocation, Skill};
         let commands = vec![SlashCommand {
             name: "review".into(),
             description: "Command".into(),
@@ -14763,7 +14763,7 @@ mod tests {
         let raw = local_file_link("src/a file#[x].rs", false);
         assert_eq!(
             raw,
-            "[a file#\\[x\\].rs](zeron-file:src/a%20file%23%5Bx%5D.rs)"
+            "[a file#\\[x\\].rs](paku-file:src/a%20file%23%5Bx%5D.rs)"
         );
         let links = file_mention_links(&raw);
         assert_eq!(links.len(), 1);
@@ -14772,7 +14772,7 @@ mod tests {
         assert!(!links[0].is_dir());
 
         let folder = local_file_link("src/components", true);
-        assert_eq!(folder, "[components](zeron-file:src/components/)");
+        assert_eq!(folder, "[components](paku-file:src/components/)");
         let links = file_mention_links(&folder);
         assert_eq!(links[0].path, "src/components");
         assert!(links[0].is_dir());
@@ -14783,13 +14783,13 @@ mod tests {
         let link = local_file_link("src/lib.rs", false);
         let (inserted, cursor_advance) =
             dropped_reference("fixnow", 3..3, &link).expect("valid drop");
-        assert_eq!(inserted, " [lib.rs](zeron-file:src/lib.rs) ");
+        assert_eq!(inserted, " [lib.rs](paku-file:src/lib.rs) ");
         assert_eq!(cursor_advance, inserted.len());
 
         let link = local_file_link("src/components", true);
         let (inserted, cursor_advance) =
             dropped_reference("fix now", 3..3, &link).expect("valid drop");
-        assert_eq!(inserted, " [components](zeron-file:src/components/)");
+        assert_eq!(inserted, " [components](paku-file:src/components/)");
         assert_eq!(cursor_advance, inserted.len() + 1);
     }
 
@@ -14893,7 +14893,7 @@ mod tests {
     fn chip_pad_ranges_cover_only_the_padding() {
         let raw = format!(
             "open {} now",
-            zeron_proto::attachment_mentions::attachment_mention_link(1, None)
+            paku_proto::attachment_mentions::attachment_mention_link(1, None)
         );
         let (display, spans) = sent_mention_display(&raw).expect("image chip projects");
         let [lead, trail] = chip_pad_ranges(&spans[0].range);
@@ -14941,7 +14941,7 @@ mod tests {
         let raw = format!(
             "{} then {}",
             local_file_link("a.rs", false),
-            zeron_proto::attachment_mentions::attachment_mention_link(1, None),
+            paku_proto::attachment_mentions::attachment_mention_link(1, None),
         );
         let (_, spans) = sent_mention_display(&raw).expect("chips project");
         let overrides = chip_pad_overrides(&spans);
@@ -14992,12 +14992,12 @@ mod tests {
     fn sent_mention_display_leaves_plain_prompts_untouched() {
         assert_eq!(sent_mention_display("fix the composer"), None);
         assert_eq!(
-            sent_mention_display("what is a zeron-file: link?"),
+            sent_mention_display("what is a paku-file: link?"),
             None,
             "scheme substring without a valid mention link"
         );
         assert_eq!(
-            sent_mention_display("[a.rs](zeron-file:../a.rs)"),
+            sent_mention_display("[a.rs](paku-file:../a.rs)"),
             None,
             "a hostile path never becomes a chip in the transcript either"
         );
@@ -15080,7 +15080,7 @@ mod tests {
 
     #[test]
     fn auto_grow_math() {
-        // The source heights (zeron composer.tsx line 235 clamp, composer-
+        // The source heights (paku composer.tsx line 235 clamp, composer-
         // actions.tsx row, 1px hairlines): 76+46+2 empty … 260+46+2 capped.
         assert_eq!(COMPOSER_MIN_HEIGHT, 120.0);
         assert_eq!(COMPOSER_MAX_HEIGHT, 304.0);
@@ -15097,7 +15097,7 @@ mod tests {
             h4,
             4.0 * INPUT_LINE_HEIGHT + TEXTAREA_PAD_V + ACTIONS_ROW_HEIGHT + PILL_BORDER_V
         );
-        // Caps at a 260px textarea box (zeron max-h-[260px] / the JS clamp).
+        // Caps at a 260px textarea box (paku max-h-[260px] / the JS clamp).
         assert_eq!(
             composer_total_height(input_content_height(100)),
             COMPOSER_MAX_HEIGHT
@@ -15914,7 +15914,7 @@ mod tests {
                 }],
                 created_at: 0,
                 device_id: "device".into(),
-                status: Some(zeron_doc::MessageStatus::Streaming),
+                status: Some(paku_doc::MessageStatus::Streaming),
                 continuation_of: None,
                 duration_ms: None,
             }]
@@ -15967,7 +15967,7 @@ mod tests {
 
     #[test]
     fn pending_input_detection() {
-        use zeron_doc::MessageStatus;
+        use paku_doc::MessageStatus;
         let input_part = MessagePart::Input {
             id: "in-r1".into(),
             request_id: "r1".into(),

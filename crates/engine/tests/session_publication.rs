@@ -1,7 +1,12 @@
-//! Real Codex adapter + engine persistence + ChatClient over a loopback relay.
+//! Durable engine publication + ChatClient over a loopback relay.
 //! Faults are injected only in temporary profiles and the test relay.
 use futures::{SinkExt, StreamExt, future::BoxFuture};
 use loro::{ExportMode, LoroDoc};
+use paku_doc::SessionDoc;
+use paku_engine::{EdgeConfig, chat2_host::EngineChatSink};
+use paku_proto::HarnessId;
+use paku_sync::chat_frames::{decode, encode, frame_type};
+use paku_sync::{ChatClient, CheckpointFetcher, DocsStore, SyncError};
 use std::collections::HashMap;
 use std::sync::{
     Arc, Mutex,
@@ -10,16 +15,6 @@ use std::sync::{
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
-use zeron_doc::{MessageRole, MessageStatus, SessionDoc};
-use zeron_engine::{
-    EdgeConfig, EngineCore, EngineProfile, HarnessRegistry, chat2_host::EngineChatSink,
-};
-use zeron_harness::CodexHarness;
-use zeron_proto::{HarnessId, ReasoningLevel, RunRequest, SandboxLevel, SessionStatus};
-use zeron_sync::chat_frames::{decode, encode, frame_type};
-use zeron_sync::{
-    ChatClient, ChatDocSink, CheckpointFetcher, DocsStore, SyncError, chat_client::RowImportOutcome,
-};
 const CHAT: &str = "publication-regression";
 
 struct Fetch(Vec<u8>);
@@ -206,234 +201,14 @@ async fn wait(mut f: impl FnMut() -> bool) {
     .await
     .expect("condition converges");
 }
-fn assemble(profile: &EngineProfile, live: bool) -> EngineCore {
-    let harness = if live {
-        CodexHarness::new().with_executable(
-            std::env::var_os("SESSION_SYNC_CODEX")
-                .expect("set SESSION_SYNC_CODEX to installed codex"),
-        )
-    } else {
-        CodexHarness::new().with_executable(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../harness/tests/fixtures/fake-codex.sh"),
-        )
-    };
-    let registry = Arc::new(HarnessRegistry::new());
-    registry.register(Arc::new(harness));
-    // The closed port guarantees no bytes escape to a production relay.
-    EngineCore::assemble_with_profile(
-        profile.clone(),
-        registry,
-        HarnessId::Codex,
-        Some(EdgeConfig::with_static_token("http://127.0.0.1:1", "test")),
-    )
-    .unwrap()
-}
-async fn turn(core: &EngineCore, cwd: &std::path::Path, live: bool, second: bool) {
-    let prompt = if live {
-        if second {
-            "Continue. Reply exactly PUBLICATION-SECOND. Do not use tools or modify files."
-        } else {
-            "Reply exactly PUBLICATION-FIRST. Do not use tools or modify files."
-        }
-    } else if second {
-        "scenario:publication"
-    } else {
-        "scenario:publication"
-    };
-    core.sessions
-        .dispatch(
-            CHAT,
-            HarnessId::Codex,
-            RunRequest {
-                mcp: None,
-                prompt: prompt.into(),
-                harness: None,
-                model: live
-                    .then(|| std::env::var("SESSION_SYNC_MODEL").unwrap_or("gpt-6-astra".into())),
-                reasoning: Some(ReasoningLevel::Medium),
-                model_options: Default::default(),
-                cwd: cwd.display().to_string(),
-                sandbox: SandboxLevel::ReadOnly,
-                auto_approve: true,
-                attachments: vec![],
-                worktree: None,
-                resume: None,
-            },
-            Some(if second { "second-user" } else { "first-user" }.into()),
-        )
-        .await
-        .unwrap();
-    wait(|| {
-        core.sessions
-            .session_status(CHAT)
-            .is_some_and(|s| s.status == SessionStatus::Idle)
-            && core
-                .doc_host
-                .open(CHAT)
-                .unwrap()
-                .doc()
-                .read_entries()
-                .unwrap()
-                .iter()
-                .filter(|e| {
-                    e.role == MessageRole::Assistant && e.status == Some(MessageStatus::Complete)
-                })
-                .count()
-                >= if second { 2 } else { 1 }
-    })
-    .await;
-}
-async fn regression(live: bool) {
-    let temp = tempfile::tempdir().unwrap();
-    let profile = EngineProfile::development(temp.path(), "test-org", "test-user");
-    let core = assemble(&profile, live);
-    turn(&core, temp.path(), live, false).await;
-    println!("first turn complete");
-    core.shutdown().await;
-    drop(core);
-    let store = Arc::new(DocsStore::open(profile.store_root()).unwrap());
-    let old = store.load_snapshot(CHAT).unwrap().unwrap();
-    let old_doc = LoroDoc::new();
-    old_doc.import(&old).unwrap();
-    // The incident's predecessor shape: cleanup after a completed assistant.
-    for i in 0..136 {
-        old_doc
-            .get_map("cleanup")
-            .insert(&format!("subagent-{i}"), "failed")
-            .unwrap();
-        old_doc.commit();
-    }
-    let orphan_snapshot = old_doc.export(ExportMode::Snapshot).unwrap();
-    let before_continue = old_doc.oplog_vv();
-    // Emulate a pre-upgrade snapshot whose memory-only outbox was lost.
-    store.delete_snapshot(CHAT).unwrap();
-    store
-        .save_snapshot_with_cursor(CHAT, &orphan_snapshot, 42, 2)
-        .unwrap();
-    let core = assemble(&profile, live);
-    turn(&core, temp.path(), live, true).await;
-    println!("resumed turn complete");
-    let handle = core.doc_host.open(CHAT).unwrap();
-    if live {
-        let (events, _) = core.sessions.subscribe(CHAT, 0).unwrap();
-        let native_sessions: Vec<_> = events
-            .iter()
-            .filter_map(|e| match &e.event {
-                zeron_proto::AgentEvent::SessionStarted { session_id, .. } => Some(session_id),
-                _ => None,
-            })
-            .collect();
-        assert!(native_sessions.len() >= 2);
-        assert!(
-            native_sessions.iter().all(|id| *id == native_sessions[0]),
-            "real Continue resumes the same native session"
-        );
-    }
-    let expected = handle.doc().read_entries().unwrap();
-    let new_rows = handle
-        .doc()
-        .doc()
-        .export(ExportMode::updates(&before_continue))
-        .unwrap();
-    let desktop = Arc::new(SessionDoc::from_doc(LoroDoc::new()));
-    desktop.doc().import(&old).unwrap();
-    let desktop_dir = tempfile::tempdir().unwrap();
-    let desktop_store = Arc::new(DocsStore::open(desktop_dir.path()).unwrap());
-    let desktop_sink = Arc::new(EngineChatSink::new(&desktop, desktop_store, CHAT));
-    assert_eq!(
-        desktop_sink.apply_row(&new_rows, 43),
-        RowImportOutcome::PendingDependencies
-    );
-    assert!(
-        !desktop
-            .read_entries()
-            .unwrap()
-            .iter()
-            .any(|e| e.id == "second-user"),
-        "old publication behavior hides the successful resumed turn"
-    );
-    println!("reproduced: successful resumed Codex turn is invisible without cleanup predecessors");
-    drop(handle);
-    core.shutdown().await;
-    drop(core);
-    let pending = store.pending_chat_updates(CHAT).unwrap();
-    assert!(!pending.is_empty());
-    let host = Arc::new(SessionDoc::from_doc(LoroDoc::new()));
-    host.doc()
-        .import(&store.load_snapshot(CHAT).unwrap().unwrap())
-        .unwrap();
-    for (_, bytes) in &pending {
-        host.doc().import(bytes).unwrap();
-    }
-    let sink = Arc::new(EngineChatSink::new(&host, store.clone(), CHAT));
-    let (url, room, acks, server) = relay(old.clone()).await;
-    let viewer = ChatClient::connect(
-        &url,
-        desktop_sink,
-        Arc::new(Fetch(old.clone())),
-        "desktop",
-        42,
-    )
-    .await
-    .unwrap();
-    let writer = ChatClient::connect(
-        &url,
-        sink.clone(),
-        Arc::new(Fetch(old.clone())),
-        "writer",
-        42,
-    )
-    .await
-    .unwrap();
-    wait(|| room.lock().unwrap().rows.len() == pending.len()).await;
-    wait(|| desktop.read_entries().unwrap().len() == expected.len()).await;
-    assert_eq!(
-        store.pending_chat_updates(CHAT).unwrap().len(),
-        pending.len(),
-        "lost ACK must retain durable batches"
-    );
-    drop(writer);
-    acks.store(true, Ordering::SeqCst);
-    let writer = ChatClient::connect(&url, sink, Arc::new(Fetch(old)), "writer", 42)
-        .await
-        .unwrap();
-    wait(|| store.pending_chat_updates(CHAT).unwrap().is_empty()).await;
-    assert_eq!(
-        room.lock().unwrap().rows.len(),
-        pending.len(),
-        "recreated actor reuses batch IDs"
-    );
-    let actual = desktop.read_entries().unwrap();
-    assert_eq!(
-        actual, expected,
-        "peer transcript, statuses and parts must all match"
-    );
-    println!(
-        "fixed: durable replay restores both turns; lost-ACK restart adds no duplicate relay rows"
-    );
-    writer.shutdown().await;
-    viewer.shutdown().await;
-    server.abort();
-}
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn codex_adapter_restart_publication() {
-    regression(false).await;
-}
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires installed authenticated Codex; uses only isolated test sessions"]
-async fn real_codex_restart_publication() {
-    regression(true).await;
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn disconnected_cleanup_is_durable_before_snapshot_debounce() {
-    use zeron_engine::{DocHost, DocHostConfig};
+    use paku_engine::{DocHost, DocHostConfig};
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(DocsStore::open(dir.path()).unwrap());
     let config = || DocHostConfig {
         device_id: "writer".into(),
-        default_harness: HarnessId::Codex,
+        default_harness: HarnessId::Mock,
         edge: Some(EdgeConfig::with_static_token("http://127.0.0.1:1", "test")),
     };
     let host = DocHost::new(store.clone(), config());
@@ -469,7 +244,7 @@ async fn disconnected_cleanup_is_durable_before_snapshot_debounce() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires private incident snapshot paths; all writes remain in a temporary store"]
 async fn supplied_incident_snapshots_reconcile_via_durable_bootstrap() {
-    use zeron_engine::{DocHost, DocHostConfig};
+    use paku_engine::{DocHost, DocHostConfig};
     let remote = std::fs::read(std::env::var("SESSION_SYNC_REMOTE_SNAPSHOT").unwrap()).unwrap();
     let before = std::fs::read(std::env::var("SESSION_SYNC_DESKTOP_SNAPSHOT").unwrap()).unwrap();
     let dir = tempfile::tempdir().unwrap();
@@ -481,7 +256,7 @@ async fn supplied_incident_snapshots_reconcile_via_durable_bootstrap() {
         store.clone(),
         DocHostConfig {
             device_id: "test".into(),
-            default_harness: HarnessId::Codex,
+            default_harness: HarnessId::Mock,
             edge: Some(EdgeConfig::with_static_token("http://127.0.0.1:1", "test")),
         },
     );
@@ -493,7 +268,7 @@ async fn supplied_incident_snapshots_reconcile_via_durable_bootstrap() {
     let updates = store.pending_chat_updates(CHAT).unwrap();
     assert!(!updates.is_empty());
     for (_, bytes) in &updates {
-        assert!(bytes.len() <= zeron_sync::chat_client::MAX_PUSH_BYTES);
+        assert!(bytes.len() <= paku_sync::chat_client::MAX_PUSH_BYTES);
     }
     let (url, _, acks, server) = relay(before.clone()).await;
     acks.store(true, Ordering::SeqCst);
@@ -555,7 +330,7 @@ async fn supplied_incident_snapshots_reconcile_via_durable_bootstrap() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn rejected_update_retries_failed_checkpoint_and_retires_only_after_success() {
     use base64::Engine as _;
-    use zeron_engine::{DocHost, DocHostConfig};
+    use paku_engine::{DocHost, DocHostConfig};
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(DocsStore::open(dir.path()).unwrap());
     let initial = SessionDoc::init(CHAT).unwrap().export_snapshot().unwrap();
@@ -569,7 +344,7 @@ async fn rejected_update_retries_failed_checkpoint_and_retires_only_after_succes
         store.clone(),
         DocHostConfig {
             device_id: "writer".into(),
-            default_harness: HarnessId::Codex,
+            default_harness: HarnessId::Mock,
             edge: Some(EdgeConfig::with_static_token(
                 url.replacen("ws", "http", 1),
                 "test",
@@ -627,7 +402,7 @@ async fn rejected_update_retries_failed_checkpoint_and_retires_only_after_succes
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cold_outbox_is_published_after_restart_without_opening_the_chat() {
-    use zeron_engine::{DocHost, DocHostConfig};
+    use paku_engine::{DocHost, DocHostConfig};
     let dir = tempfile::tempdir().unwrap();
     let doc = SessionDoc::init(CHAT).unwrap();
     let before = doc.doc().oplog_vv();

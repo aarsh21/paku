@@ -1,5 +1,7 @@
 # Idle presence updates and Metal memory attribution
 
+> Historical upstream **Zeron** evidence, not Paku verification. Recorded revisions, paths and hashes are preserved; reproduction commands apply only to those upstream revisions. Current Paku verification: `scripts/verify-paku.sh`.
+
 This pass starts at v0.2.43 (`3e96088`) and uses the signed-in production
 backend, including the existing populated history. It follows the unresolved
 graphics-memory observation in [the earlier report](performance-macos-stability.md).

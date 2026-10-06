@@ -1,7 +1,7 @@
 //! SessionsEngine — per-chat agent runs: dispatch, steering, interrupts, input bridging,
 //! journal + broadcast fan-out, and 120ms coalesced doc streaming.
 //!
-//! Pragmatic port of zeron's `sessions.ts` (spec: feature-inventory §3.2):
+//! Pragmatic port of paku's `sessions.ts` (spec: feature-inventory §3.2):
 //! - every `AgentEvent` is (a) appended to the on-disk run journal, (b) broadcast to
 //!   in-process subscribers, (c) folded via `fold_event_into_parts` and diffed into the
 //!   chat's `SessionDoc` through `SegmentWriter` on a coalesced `STREAM_COMMIT_MS` timer;
@@ -10,7 +10,7 @@
 //! - a `Steered` event splits the assistant entry at the exact boundary;
 //! - recovery (interrupt or a stale journal at boot) stamps the streaming entry `aborted`.
 //!
-//! Scope notes: sessions are keyed by chat id (one live run per chat). Zeron's pulse
+//! Scope notes: sessions are keyed by chat id (one live run per chat). Paku's pulse
 //! loop is ported as the 15s liveness heartbeat in `drive_run`; its stall watchdog is
 //! deliberately NOT ported (rejected in review — agents may legitimately wait on
 //! something for far longer than any timeout, and a live child IS the working signal).
@@ -24,12 +24,12 @@ use chrono::Utc;
 use futures::StreamExt;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
-use zeron_doc::{
+use paku_doc::{
     DocError, MessagePart, MessageRole, MessageStatus, STREAM_COMMIT_MS, SegmentWriter, SessionDoc,
     SessionMessageEntry, fold_event_into_parts, sanitize_tool_call,
 };
-use zeron_harness::{CancellationToken, Harness, RunControls, SteerMessage};
-use zeron_proto::{
+use paku_harness::{CancellationToken, Harness, RunControls, SteerMessage};
+use paku_proto::{
     AgentEvent, DoneStatus, HarnessId, RunRequest, Session, SessionStatus, UserInputAnswer,
     UserInputQuestion,
 };
@@ -60,9 +60,8 @@ pub enum SteerOutcome {
 type PendingInputs = Arc<Mutex<HashMap<String, oneshot::Sender<Vec<UserInputAnswer>>>>>;
 
 /// A harness-native session id plus the cwd it was created under. Harness
-/// session stores are cwd-scoped (claude keys conversations by project
-/// directory — zeron sessions.ts:563 "harness session stores are keyed by
-/// cwd"), so resume is only injected for runs launched from the same cwd.
+/// session stores are cwd-scoped, so resume is only injected for runs
+/// launched from the same cwd.
 #[derive(Debug, Clone)]
 struct HarnessSessionRef {
     session_id: String,
@@ -77,12 +76,12 @@ struct HarnessSessionRef {
 struct RuntimeConfig {
     harness_id: HarnessId,
     model: Option<String>,
-    reasoning: Option<zeron_proto::ReasoningLevel>,
+    reasoning: Option<paku_proto::ReasoningLevel>,
     model_options: serde_json::Map<String, serde_json::Value>,
     cwd: String,
-    sandbox: zeron_proto::SandboxLevel,
+    sandbox: paku_proto::SandboxLevel,
     auto_approve: bool,
-    worktree: Option<zeron_proto::WorktreeSpec>,
+    worktree: Option<paku_proto::WorktreeSpec>,
 }
 
 impl RuntimeConfig {
@@ -142,7 +141,7 @@ struct RoutedSteer {
 struct Inner {
     device_id: String,
     /// Loopback IPC port this engine serves, once known (0 = not serving):
-    /// what the injected `zeron mcp` server dials back into.
+    /// what the injected `paku mcp` server dials back into.
     ipc_port: std::sync::atomic::AtomicU16,
     journal: Arc<RunJournal>,
     registry: Arc<HarnessRegistry>,
@@ -161,7 +160,7 @@ struct Inner {
     last_requests: Mutex<HashMap<String, RunRequest>>,
     /// Harness-native session ids per chat (resume continuity across turns) —
     /// the live-process cache over the durable copy on the workspace chat row
-    /// (zeron kept the same pair on `chats.harness_session_id`). An empty
+    /// (paku kept the same pair on `chats.harness_session_id`). An empty
     /// session id is the "do not resume" tombstone after a rejected resume.
     harness_sessions: Mutex<HashMap<String, HarnessSessionRef>>,
     /// Auto-titler for untitled chats (wired at engine assembly; absent in bare tests).
@@ -213,8 +212,8 @@ impl SessionsEngine {
     }
 
     /// Record the loopback IPC port this engine serves. Runs started after
-    /// this carry Zeron's MCP server (see [`Inner::zeron_mcp`]); until then —
-    /// or with 0 — agents get no Zeron tools rather than a dead server.
+    /// this carry Paku's MCP server (see [`Inner::paku_mcp`]); until then —
+    /// or with 0 — agents get no Paku tools rather than a dead server.
     pub fn set_ipc_port(&self, port: u16) {
         self.inner
             .ipc_port
@@ -382,7 +381,7 @@ impl SessionsEngine {
     ///
     /// - The user message entry is written to the doc immediately (id = `message_id`).
     /// - A live steerable run receives the prompt as its next turn via the mailbox
-    ///   (zeron's persistent-session routing); otherwise any live run is interrupted
+    ///   (paku's persistent-session routing); otherwise any live run is interrupted
     ///   first — never two runtimes driving one chat.
     pub async fn dispatch(
         &self,
@@ -425,7 +424,7 @@ impl SessionsEngine {
             .map_err(|error| EngineError::Other(error.to_string()))?;
         // Native-only catalog entries have no portable file fallback. Reject
         // cross-harness delivery before recording or routing the user turn.
-        zeron_proto::invocation::validate_harness_invocations(&request.prompt, harness_id)
+        paku_proto::invocation::validate_harness_invocations(&request.prompt, harness_id)
             .map_err(EngineError::Other)?;
         let routed = lock(&self.inner.runs).get(chat_id).map(|h| {
             (
@@ -447,14 +446,7 @@ impl SessionsEngine {
                 // Warm dispatch uses the same mailbox as explicit steering.
                 // Register acceptance before a fast boundary can retire it.
                 let message = SteerMessage {
-                    // OpenCode must see the canonical selection before it
-                    // decodes the provider command: a project-scoped command
-                    // can disappear between composer discovery and delivery.
-                    prompt: if harness_id == HarnessId::Opencode {
-                        delivered.to_owned()
-                    } else {
-                        zeron_proto::invocation::harness_prompt(delivered, harness_id)
-                    },
+                    prompt: paku_proto::invocation::harness_prompt(delivered, harness_id),
                     message_id: Some(user_id.clone()),
                 };
                 if let Ok(permit) = steer_tx.reserve().await {
@@ -530,7 +522,7 @@ impl SessionsEngine {
         let user_id = message_id.unwrap_or_else(new_id);
         handle.write_user_message(&user_id, &request.prompt, now_ms())?;
 
-        // Engine-owned resume (zeron sessions.ts:736 — every dispatch read the
+        // Engine-owned resume (paku sessions.ts:736 — every dispatch read the
         // chat's stored harness session): callers always send `resume: None`;
         // the engine threads the chat's prior harness session back in so a new
         // process (app restart) continues the same harness conversation. The
@@ -699,17 +691,13 @@ impl SessionsEngine {
         let Some((run_id, harness_id, steer_tx, ledger, history_sent)) = target else {
             return Ok(SteerOutcome::NotSteerable);
         };
-        zeron_proto::invocation::validate_harness_invocations(prompt, harness_id)
+        paku_proto::invocation::validate_harness_invocations(prompt, harness_id)
             .map_err(EngineError::Other)?;
         let user_id = message_id.unwrap_or_else(new_id);
         let bootstrap = self.warm_fork_history(chat_id, harness_id, prompt, &history_sent);
         let delivered = bootstrap.as_deref().unwrap_or(prompt);
         let message = SteerMessage {
-            prompt: if harness_id == HarnessId::Opencode {
-                delivered.to_owned()
-            } else {
-                zeron_proto::invocation::harness_prompt(delivered, harness_id)
-            },
+            prompt: paku_proto::invocation::harness_prompt(delivered, harness_id),
             message_id: Some(user_id.clone()),
         };
         // Saturation is backpressure, not a dead runtime. Waiting for room
@@ -830,7 +818,7 @@ impl SessionsEngine {
     /// with a VISIBLE "Run interrupted by engine restart" error part, close the
     /// journal with a synthetic `Done{interrupted}` — and then PICK THE RUN BACK
     /// UP: a fresh crashed turn with revival budget left is re-dispatched against
-    /// the remembered harness session (zeron: "not just eulogized";
+    /// the remembered harness session (paku: "not just eulogized";
     /// `MAX_AUTO_RESUME` = 3 consecutive revivals, fresh = crashed < 12h ago).
     pub fn recover_stale(&self) -> Result<usize, EngineError> {
         const MAX_AUTO_RESUME: u32 = 3;
@@ -846,7 +834,7 @@ impl SessionsEngine {
             // Harness continuity first: the crashed run's session id may only
             // exist in the journal (the debounced workspace-row write may
             // never have landed) — remember it so the revived run resumes the
-            // same harness conversation (zeron recoverDraft, sessions.ts:538).
+            // same harness conversation (paku recoverDraft, sessions.ts:538).
             if let Some((session_id, cwd)) = self.inner.journal_harness_session(&chat_id) {
                 self.inner
                     .remember_harness_session(&chat_id, &session_id, &cwd);
@@ -911,7 +899,7 @@ impl SessionsEngine {
                 let request = sessions
                     .last_request(&chat_id)
                     .or_else(|| host.request_from_chat_row(&chat_id, &prompt_text))
-                    // Last resort: the journal's own cwd (zeron's draft config)
+                    // Last resort: the journal's own cwd (paku's draft config)
                     // — a crash can predate the debounced workspace-row write.
                     .or_else(|| {
                         let (_, cwd) = sessions.inner.journal_harness_session(&chat_id)?;
@@ -923,7 +911,7 @@ impl SessionsEngine {
                             reasoning: None,
                             model_options: Default::default(),
                             cwd,
-                            sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
+                            sandbox: paku_proto::SandboxLevel::WorkspaceWrite,
                             auto_approve: false,
                             attachments: Vec::new(),
                             resume: None,
@@ -1190,24 +1178,24 @@ impl Inner {
         lock(&self.doc_host).clone()
     }
 
-    /// Zeron's own MCP server for a run of `chat_id`: this binary's `zeron
+    /// Paku's own MCP server for a run of `chat_id`: this binary's `paku
     /// mcp` subcommand, dialing the engine's IPC port and stamped with the
     /// originating chat + device so the agent's side chats link back here.
     /// None when the engine serves no port or its executable is unknown.
-    fn zeron_mcp(&self, chat_id: &str) -> Option<zeron_proto::McpServer> {
+    fn paku_mcp(&self, chat_id: &str) -> Option<paku_proto::McpServer> {
         let port = self.ipc_port.load(std::sync::atomic::Ordering::Relaxed);
         if port == 0 {
             return None;
         }
         let command = std::env::current_exe().ok()?.to_str()?.to_owned();
-        Some(zeron_proto::McpServer {
-            name: "zeron".into(),
+        Some(paku_proto::McpServer {
+            name: "paku".into(),
             command,
             args: vec!["mcp".into()],
             env: [
-                ("ZERON_IPC_PORT".to_owned(), port.to_string()),
-                ("ZERON_CHAT_ID".to_owned(), chat_id.to_owned()),
-                ("ZERON_DEVICE_ID".to_owned(), self.device_id.clone()),
+                ("PAKU_IPC_PORT".to_owned(), port.to_string()),
+                ("PAKU_CHAT_ID".to_owned(), chat_id.to_owned()),
+                ("PAKU_DEVICE_ID".to_owned(), self.device_id.clone()),
             ]
             .into_iter()
             .collect(),
@@ -1230,7 +1218,7 @@ impl Inner {
 
     /// Record the chat's harness-native session id (and its cwd): live-process
     /// cache plus the durable workspace chat row — the row is what survives an
-    /// engine restart (zeron sessions.ts:1039).
+    /// engine restart (paku sessions.ts:1039).
     fn remember_harness_session(&self, chat_id: &str, session_id: &str, cwd: &str) {
         if session_id.is_empty() {
             return;
@@ -1247,15 +1235,11 @@ impl Inner {
         }
     }
 
-    // NB: there is deliberately no `forget_harness_session` anymore. The old
-    // tombstone fired on "run died before SessionStarted", which — since the
-    // ACP conversion made stale ids a harness-internal fallback — only ever
-    // meant a child STARTUP failure, and permanently severed good
-    // conversations (user incident 2026-08-13). A truly stale id simply
-    // yields a fresh session whose SessionStarted overwrites the row.
+    // A startup failure must not tombstone a good session id. A truly stale
+    // id is handled by the harness; its fresh SessionStarted overwrites the row.
 
     /// The session id to resume for a run in `chat_id` launching from `cwd`
-    /// (zeron sessions.ts:736, looked up on every dispatch):
+    /// (paku sessions.ts:736, looked up on every dispatch):
     /// live-process cache → workspace chat row → journal scan (the crash path
     /// where the debounced row write never landed — SessionStarted/Done events
     /// are journaled per event, flushed immediately). Cwd-gated throughout:
@@ -1382,7 +1366,7 @@ impl Inner {
                     entry
                         .parts
                         .iter()
-                        .any(|part| matches!(part, zeron_doc::MessagePart::Fork { .. }))
+                        .any(|part| matches!(part, paku_doc::MessagePart::Fork { .. }))
                 })?
             }
         };
@@ -1393,8 +1377,8 @@ impl Inner {
                     .parts
                     .iter()
                     .filter_map(|part| match part {
-                        zeron_doc::MessagePart::Text { text, .. } => Some(text.clone()),
-                        zeron_doc::MessagePart::Tool { call, output, .. } => Some(format!(
+                        paku_doc::MessagePart::Text { text, .. } => Some(text.clone()),
+                        paku_doc::MessagePart::Tool { call, output, .. } => Some(format!(
                             "Tool: {}\n{}",
                             serde_json::to_string(call).unwrap_or_default(),
                             output.clone().unwrap_or_default()
@@ -1418,16 +1402,11 @@ impl Inner {
     }
 }
 
-/// Whether the provider routes this prompt as a native command: its delivered
-/// text leads with `/name` (Codex `command_request`, OpenCode commands, Claude
-/// slash commands). Anything put in front of it would make it model input.
+/// Whether the harness routes this prompt as a native command: its delivered
+/// text leads with `/name`. Anything put in front of it would make it model input.
 fn native_command(prompt: &str, harness: HarnessId) -> bool {
-    let delivered = if harness == HarnessId::Codex {
-        zeron_proto::invocation::invocation_prompt(prompt)
-    } else {
-        zeron_proto::invocation::harness_prompt(prompt, harness)
-    };
-    zeron_proto::invocation::leading_command(&delivered).is_some()
+    let delivered = paku_proto::invocation::harness_prompt(prompt, harness);
+    paku_proto::invocation::leading_command(&delivered).is_some()
 }
 
 /// A turn is in flight: streaming, or parked on a question it is still owed an
@@ -1594,7 +1573,7 @@ impl SubagentSink {
         if let Err(err) = finished {
             tracing::warn!(doc = %self.doc_id, error = %err, "subagent sink finish failed");
         }
-        let entries = zeron_doc::join_continuation_entries(self.doc.read_entries().ok()?);
+        let entries = paku_doc::join_continuation_entries(self.doc.read_entries().ok()?);
         serde_json::to_string(&entries).ok()
     }
 }
@@ -1720,68 +1699,6 @@ struct RunResumeState {
     fork_history_sent: Arc<std::sync::atomic::AtomicBool>,
 }
 
-fn cursor_unstarted_history(
-    doc: &SessionDoc,
-    current_id: &str,
-    prompt: &str,
-    has_session: bool,
-) -> Result<String, DocError> {
-    // Convert each message before JSON encoding. Rewriting canonical chips in
-    // the encoded envelope can introduce unescaped quotes or newlines and can
-    // cause Cursor's current message to be converted twice.
-    let prompt = zeron_proto::invocation::harness_prompt(prompt, HarnessId::Cursor);
-    let entries = doc.read_entries()?;
-    let preceding: Vec<_> = entries
-        .iter()
-        .take_while(|entry| entry.id != current_id)
-        .collect();
-    // With an existing session, only bridge the tail whose assistant never
-    // produced content. A process can die before writing its SDK-side receipt,
-    // even though an older session ID still exists.
-    let after = if has_session {
-        preceding
-            .iter()
-            .rposition(|entry| {
-                entry.role == MessageRole::Assistant
-                    && entry.parts.iter().any(|part| match part {
-                        MessagePart::Text { text, .. } | MessagePart::Reasoning { text, .. } => {
-                            !text.is_empty()
-                        }
-                        MessagePart::Tool { .. } | MessagePart::Input { .. } => true,
-                        _ => false,
-                    })
-            })
-            .map_or(0, |i| i + 1)
-    } else {
-        0
-    };
-    let previous: Vec<String> = preceding
-        .iter()
-        .skip(after)
-        .filter(|entry| entry.role == MessageRole::User)
-        .map(|entry| {
-            entry
-                .parts
-                .iter()
-                .filter_map(|part| match part {
-                    MessagePart::Text { text, .. } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-        .filter(|text| !text.is_empty())
-        .map(|text| zeron_proto::invocation::harness_prompt(&text, HarnessId::Cursor))
-        .collect();
-    if previous.is_empty() {
-        return Ok(prompt);
-    }
-    Ok(format!(
-        "The preceding user messages may not have reached a Cursor checkpoint before startup stopped. Retain this JSON as conversation history; do not rerun prior tools or side effects. Respond to the current message.\n{}",
-        serde_json::json!({"previousUserMessages": previous, "currentUserMessage": prompt})
-    ))
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn drive_run(
     inner: Arc<Inner>,
@@ -1806,7 +1723,7 @@ async fn drive_run(
     // The host stamps its own MCP server onto every run it drives, so the
     // agent can spawn and talk to side chats through the engine it runs in.
     if request.mcp.is_none() {
-        request.mcp = inner.zeron_mcp(&chat_id);
+        request.mcp = inner.paku_mcp(&chat_id);
     }
     // Kept whole for the startup-crash retry (same user entry; dispatch
     // re-injects the stored resume id). Option so the retry branch (inside
@@ -1836,57 +1753,33 @@ async fn drive_run(
             .fork_history_sent
             .store(true, std::sync::atomic::Ordering::Release);
     }
-    // Startup can stop before the SDK saves user text, with no new session
-    // ID or receipt. Bridge that unacknowledged tail from our transcript;
-    // a fresh session needs all prior user text, not just the latest tail.
-    let prepared = if harness_id == HarnessId::Cursor {
-        cursor_unstarted_history(
-            &doc,
-            &resume_state.user_message_id,
-            &request.prompt,
-            request.resume.is_some(),
-        )
-        .map(|prompt| request.prompt = prompt)
-        .map_err(|e| zeron_harness::HarnessError::Protocol(e.to_string()))
-    } else {
-        Ok(())
-    };
     // Waiting here keeps dispatch and the shared queue-flush watcher responsive.
     // The pending-update marker still orders new subprocesses after installation.
     // Share the lease with the adapter so child cleanup outlives this event loop.
     let mut _execution_lease = None;
-    let started = match prepared {
-        Ok(()) => {
-            let lease = tokio::select! {
-                biased;
-                _ = controls.interrupt.cancelled() => None,
-                lease = inner.registry.execution_lease(harness_id) => Some(Arc::new(lease)),
-            };
-            if let Some(lease) = lease {
-                _execution_lease = Some(lease.clone());
-                controls.execution_lease = Some(lease);
-                if let Some(listener) = inner.turn_listener.get() {
-                    listener(&chat_id, &request.cwd);
-                }
-                let mut wire_request = request;
-                if !matches!(harness_id, HarnessId::Cursor | HarnessId::Opencode) {
-                    wire_request.prompt =
-                        zeron_proto::invocation::harness_prompt(&wire_request.prompt, harness_id);
-                }
-                harness.run(wire_request, controls).await
-            } else {
-                Ok(futures::stream::once(async {
-                    Ok(AgentEvent::Done {
-                        status: DoneStatus::Interrupted,
-                        result: None,
-                        error: None,
-                        session_id: None,
-                    })
-                })
-                .boxed())
-            }
+    let lease = tokio::select! {
+        biased;
+        _ = controls.interrupt.cancelled() => None,
+        lease = inner.registry.execution_lease(harness_id) => Some(Arc::new(lease)),
+    };
+    let started = if let Some(lease) = lease {
+        _execution_lease = Some(lease.clone());
+        controls.execution_lease = Some(lease);
+        if let Some(listener) = inner.turn_listener.get() {
+            listener(&chat_id, &request.cwd);
         }
-        Err(error) => Err(error),
+        request.prompt = paku_proto::invocation::harness_prompt(&request.prompt, harness_id);
+        harness.run(request, controls).await
+    } else {
+        Ok(futures::stream::once(async {
+            Ok(AgentEvent::Done {
+                status: DoneStatus::Interrupted,
+                result: None,
+                error: None,
+                session_id: None,
+            })
+        })
+        .boxed())
     };
     let mut stream = match started {
         Ok(stream) => stream,
@@ -1894,8 +1787,7 @@ async fn drive_run(
             let message = err.to_string();
             tracing::warn!(chat = %chat_id, harness = ?harness_id, error = %message, "run failed to start");
             // The journal alone is live-only: without an entry the transcript
-            // shows "Run failed" with no reason (an OpenCode server that never
-            // booted looked exactly like that).
+            // shows "Run failed" with no reason.
             let parts = [MessagePart::Error {
                 id: "e0".into(),
                 message: message.clone(),
@@ -1975,25 +1867,22 @@ async fn drive_run(
     // so the gate still catches real crashes. touch_session throttles at 10s.
     let mut live_heartbeat = tokio::time::interval(std::time::Duration::from_secs(15));
     live_heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    // PERSISTENT SESSION (zeron runsBySession): a completed turn on a
+    // PERSISTENT SESSION (paku runsBySession): a completed turn on a
     // steerable harness parks here instead of ending the run — the child and
     // its steering mailbox stay warm, and the next user message (dispatch
     // routes into a live run) starts the next turn with zero respawn/resume
     // latency. `Some(when)` = idle since then; the 30-min reaper below ends
-    // a session nobody comes back to (zeron SESSION_IDLE_MS).
-    // `ZERON_SESSION_IDLE_MS` overrides the window (tests).
-    let session_idle = std::env::var("ZERON_SESSION_IDLE_MS")
+    // a session nobody comes back to (paku SESSION_IDLE_MS).
+    // `PAKU_SESSION_IDLE_MS` overrides the window (tests).
+    let session_idle = std::env::var("PAKU_SESSION_IDLE_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .map(std::time::Duration::from_millis)
         .unwrap_or(std::time::Duration::from_secs(30 * 60));
-    // A live subagent stretches the window, but never unbounded: every
-    // driver's subagent terminal is a best-effort vendor signal (claude's
-    // untagged task_notification, grok's subagent_finished, codex thread
-    // closure), and one lost signal would otherwise pin the child — and this
-    // loop's registry heartbeat — until the chat is archived. A subagent
-    // silent this long (4h by default) is presumed lost; the reap stamps its
-    // chip failed.
+    // A live subagent stretches the window, but never unbounded: one lost
+    // terminal signal would otherwise pin the child and this loop's registry
+    // heartbeat until the chat is archived. A subagent silent this long (4h
+    // by default) is presumed lost; the reap stamps its chip failed.
     let subagent_silence = session_idle * 8;
     let mut idle_since: Option<tokio::time::Instant> = None;
     let steerable = harness.supports_steering();
@@ -2008,17 +1897,15 @@ async fn drive_run(
     // segment finalized Complete, status Idle, child and mailbox warm. A
     // false trip (the agent was quietly waiting on something invisible)
     // costs a status dip: the parked-resume path below re-arms Working the
-    // moment output flows again, and nothing is lost. `ZERON_TURN_QUIESCE_MS`
+    // moment output flows again, and nothing is lost. `PAKU_TURN_QUIESCE_MS`
     // overrides the window; 0 disables.
-    // RETIRED for native drivers: a harness whose every turn shape ends with
-    // a deterministic wire Done (claude/codex/cursor native) needs no
-    // quiesce backstop — arming one only risks false parks on long silent
-    // work. The env knob can configure a diagnostic window, but a prompt
-    // with an authoritative completion signal must still await that signal.
-    // ACP retains the watchdog only for unowned self-continued activity.
+    // A harness with a deterministic wire Done needs no quiesce backstop —
+    // arming one only risks false parks on long silent work. The env knob can
+    // configure a diagnostic window, but a prompt with an authoritative
+    // completion signal must still await that signal.
     let deterministic_turn_end = harness.deterministic_turn_end();
     let authoritative_prompt_end = harness.authoritative_prompt_end();
-    let quiesce_after: Option<std::time::Duration> = match std::env::var("ZERON_TURN_QUIESCE_MS")
+    let quiesce_after: Option<std::time::Duration> = match std::env::var("PAKU_TURN_QUIESCE_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
     {
@@ -2029,19 +1916,16 @@ async fn drive_run(
     };
     let mut last_stream_activity = tokio::time::Instant::now();
     // SELF-CONTINUED turns get a much SHORTER quiesce window. A turn the
-    // agent starts on its own (background-task wake) can never receive a
-    // harness Done: the adapter has no `session/prompt` outstanding to
-    // settle — verified in claude-agent-acp's autonomous-result lane, which
-    // consumes the SDK's turn-end without emitting anything; codex shows
-    // the same shape. The watchdog is that turn shape's ONLY settle path,
-    // so the default 120s window read as 2min of stuck-Working after every
-    // background notification (user report 2026-08-13). The in-flight
+    // agent starts on its own (background-task wake) may have no outstanding
+    // prompt for the harness to settle. The watchdog is that turn shape's
+    // fallback settle path, so the default 120s window read as 2min of
+    // stuck-Working after every background notification. The in-flight
     // fold gate below still protects running tools; reasoning heartbeats
-    // push the window during real thinking. `ZERON_SELF_TURN_QUIESCE_MS`
+    // push the window during real thinking. `PAKU_SELF_TURN_QUIESCE_MS`
     // overrides; 0 falls back to the normal window. An explicit
-    // `ZERON_TURN_QUIESCE_MS=0` still disables the watchdog entirely.
+    // `PAKU_TURN_QUIESCE_MS=0` still disables the watchdog entirely.
     let self_quiesce_after: Option<std::time::Duration> =
-        match std::env::var("ZERON_SELF_TURN_QUIESCE_MS")
+        match std::env::var("PAKU_SELF_TURN_QUIESCE_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
         {
@@ -2107,7 +1991,7 @@ async fn drive_run(
                     }
                     break SessionStatus::Idle;
                 }
-                // Idle reaper (zeron SESSION_IDLE_MS): a parked persistent session
+                // Idle reaper (paku SESSION_IDLE_MS): a parked persistent session
                 // nobody returned to in 30 minutes releases its child. The turn
                 // was finalized at Done, so this end is clean — no aborted stamp.
                 // A live background subagent is somebody still using the child:
@@ -2209,7 +2093,7 @@ async fn drive_run(
                     && steerable
                     && !folded.iter().any(|p| match p {
                         MessagePart::Tool { id, resolved: false, .. } => {
-                            id != zeron_proto::LIVE_PLAN_TOOL_ID
+                            id != paku_proto::LIVE_PLAN_TOOL_ID
                         }
                         MessagePart::Input { resolved: false, .. } => true,
                         _ => false,
@@ -2300,9 +2184,8 @@ async fn drive_run(
                 .iter()
                 .any(|p| matches!(p, MessagePart::Tool { id, .. } if id == parent_tool_use_id));
             let sink_known = subagents.contains_key(parent_tool_use_id);
-            // A Done with NO sink (a subagent that never streamed — codex
-            // turn ends can beat registration) is chip-only: minting a doc
-            // just to freeze it empty helps no one, and stamping the ref
+            // A Done with NO sink (a subagent that never streamed) is chip-only:
+            // minting a doc just to freeze it empty helps no one, and stamping the ref
             // would link the chip to that never-created doc (an empty tab
             // on click).
             let done_only = !sink_known && matches!(sub_event.as_ref(), AgentEvent::Done { .. });
@@ -2326,7 +2209,7 @@ async fn drive_run(
                         }
                     }
                 }
-                zeron_doc::fold_event_into_parts(&mut folded, &event);
+                paku_doc::fold_event_into_parts(&mut folded, &event);
                 if !dirty {
                     dirty = true;
                     flush_at = tokio::time::Instant::now()
@@ -2389,7 +2272,7 @@ async fn drive_run(
                     continue;
                 }
                 let was_clean = !sink.dirty;
-                zeron_doc::fold_event_into_parts(&mut sink.folded, sub_event);
+                paku_doc::fold_event_into_parts(&mut sink.folded, sub_event);
                 sink.dirty = true;
                 // A sink waking on its own must arm the same commit window
                 // the parent's dirty flag does — `flush_at` is otherwise only
@@ -2424,7 +2307,7 @@ async fn drive_run(
                     {
                         host.upload_tool_sidecar(
                             &chat_id,
-                            zeron_doc::SidecarPayload {
+                            paku_doc::SidecarPayload {
                                 part_id: doc_id,
                                 output: Some(json),
                                 diff: None,
@@ -2472,19 +2355,17 @@ async fn drive_run(
             continue;
         }
         // PARKED: a steer boundary, a terminal Done, or SELF-CONTINUED OUTPUT
-        // re-opens the session; everything else stays gated. The ACP child
-        // keeps forwarding `session/update` frames after a turn completes,
-        // and they split two ways:
+        // re-opens the session; everything else stays gated. Events after a
+        // turn completes split two ways:
         //
         // - Post-turn NOISE — late tool_call_updates for commands folded in a
         //   prior segment, command refreshes, reasoning heartbeats. Treating
         //   those as "the next turn" re-armed Working with no Done ever
         //   coming (the eternally-running session bug) and folded orphan
         //   parts into a phantom segment. Still dropped.
-        // - SELF-CONTINUED WORK — Claude Code re-invokes itself when a
-        //   background task finishes (turns no prompt started) and streams
-        //   real output for them. Dropping those LOST transcript content
-        //   (2026-08-12: "Build finished successfully…" streamed by the
+        // - SELF-CONTINUED WORK — a background task finishing can start a
+        //   turn without a prompt and stream real output for it. Dropping
+        //   those LOST transcript content ("Build finished successfully…" streamed by the
         //   agent, absent from the doc). Fresh text or a genuinely new tool
         //   call resumes the session: new segment, Working, and the turn
         //   settles again via Done — or via the quiesce watchdog, which is
@@ -2506,7 +2387,7 @@ async fn drive_run(
                 ) || matches!(
                     &event,
                     AgentEvent::ToolCall { id, .. }
-                        if id == zeron_proto::LIVE_PLAN_TOOL_ID || !seen_tools.contains(id)
+                        if id == paku_proto::LIVE_PLAN_TOOL_ID || !seen_tools.contains(id)
                 ));
             if self_continued {
                 tracing::info!(
@@ -2575,8 +2456,8 @@ async fn drive_run(
             // treating its reappearance after a park/steer reset as a stale
             // echo dropped the todo list for the rest of the run — from the
             // first boundary on, plans never rendered again.
-            AgentEvent::ToolCall { id, .. } if id == zeron_proto::LIVE_PLAN_TOOL_ID => {}
-            AgentEvent::ToolResult { id, .. } if id == zeron_proto::LIVE_PLAN_TOOL_ID => {}
+            AgentEvent::ToolCall { id, .. } if id == paku_proto::LIVE_PLAN_TOOL_ID => {}
+            AgentEvent::ToolResult { id, .. } if id == paku_proto::LIVE_PLAN_TOOL_ID => {}
             AgentEvent::ToolCall { id, .. } => {
                 if !in_segment(&folded, id) && seen_tools.contains(id) {
                     continue;
@@ -2593,10 +2474,9 @@ async fn drive_run(
 
         // Startup-crash retry: a run that dies before ever starting (errored
         // Done, no SessionStarted, nothing streamed) means the AGENT CHILD
-        // failed to come up — not that the injected resume id was bad. Since
-        // the ACP conversion (2026-08-08) a stale id is handled inside the
-        // harness (`session/load` falls back to `session/new`), so the old
-        // guess here — tombstone the id, retry fresh — fired only on child
+        // failed to come up — not that the injected resume id was bad. A
+        // stale id is handled inside the harness, so the old guess here —
+        // tombstone the id, retry fresh — fired only on child
         // startup failures and permanently severed GOOD conversations (user
         // incident 2026-08-13). The id stays; retry ONCE against the same
         // user entry, resume and all, in case the crash was transient. A
@@ -2723,15 +2603,15 @@ async fn drive_run(
 
         inner.publish(&chat_id, &event);
 
-        // Defensive rule from zeron: a mid-run SessionStarted re-emission (Claude SDK
-        // background re-invocations) must not wipe the segment being written.
+        // A mid-run SessionStarted re-emission must not wipe the segment
+        // being written.
         let skip_fold = matches!(&event, AgentEvent::SessionStarted { .. }) && !folded.is_empty();
         if !skip_fold {
             fold_event_into_parts(&mut folded, &event);
             // R2 sidecar PARKED (2026-08-10, product call): the fold's
             // summary/stats ARE the doc's whole record — no refs stamped, no
             // uploads. Full outputs survive only in the host's local run
-            // journal. To reintroduce: `zeron_doc::sidecar_payload(&event)`
+            // journal. To reintroduce: `paku_doc::sidecar_payload(&event)`
             // → `apply_sidecar_refs` → `doc_host.upload_tool_sidecar`, all
             // still in place and tested.
         }
@@ -2858,7 +2738,7 @@ async fn drive_run(
         {
             host.upload_tool_sidecar(
                 &chat_id,
-                zeron_doc::SidecarPayload {
+                paku_doc::SidecarPayload {
                     part_id: doc_id,
                     output: Some(json),
                     diff: None,
@@ -2927,98 +2807,42 @@ async fn drive_run(
 mod tests {
     use super::*;
 
+    use paku_proto::{HarnessId, RunRequest, SandboxLevel};
+
     #[test]
-    fn cursor_recovery_converts_rich_messages_before_json_encoding() {
-        let doc = zeron_doc::SessionDoc::init("cursor-rich-recovery").unwrap();
-        let skill = zeron_proto::invocation::Invocation::Skill {
-            name: "review \"quoted\"".into(),
-            path: "/repo/quoted \"path\"/SKILL.md".into(),
+    fn pi_native_commands_are_detected_after_composer_conversion() {
+        use paku_proto::invocation::{Invocation, SkillCommand};
+
+        let command = Invocation::Command {
+            name: "compact".into(),
+        }
+        .link();
+        let native_skill = Invocation::Skill {
+            name: "review".into(),
+            path: "/repo/review/SKILL.md".into(),
+            command: Some(SkillCommand {
+                name: "skill:review".into(),
+                harness: HarnessId::Pi,
+            }),
+        }
+        .link();
+        let file_skill = Invocation::Skill {
+            name: "review".into(),
+            path: "/repo/review/SKILL.md".into(),
             command: None,
         }
         .link();
-        let previous = format!("Previous {skill}\nSecond line with \\ and \"quotes\"");
-        doc.push_message(&zeron_doc::SessionMessageEntry {
-            id: "u1".into(),
-            role: zeron_doc::MessageRole::User,
-            parts: vec![zeron_doc::MessagePart::Text {
-                id: "u1-text".into(),
-                text: previous.clone(),
-            }],
-            created_at: 0,
-            device_id: "test".into(),
-            status: None,
-            continuation_of: None,
-            duration_ms: None,
-        })
-        .unwrap();
-        let current = format!("Current {skill}\nKeep **Markdown**");
-        let delivered = super::cursor_unstarted_history(&doc, "u2", &current, false).unwrap();
-        let (_, json) = delivered.split_once('\n').unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            parsed["currentUserMessage"],
-            zeron_proto::invocation::harness_prompt(&current, zeron_proto::HarnessId::Cursor)
-        );
-        assert_eq!(
-            parsed["previousUserMessages"][0],
-            zeron_proto::invocation::harness_prompt(&previous, zeron_proto::HarnessId::Cursor)
-        );
-    }
 
-    #[test]
-    fn cursor_without_a_session_id_retains_only_preceding_user_messages() {
-        let doc = zeron_doc::SessionDoc::init("cursor-unstarted").unwrap();
-        for (id, role, text) in [
-            (
-                "u1",
-                zeron_doc::MessageRole::User,
-                "first interrupted request",
-            ),
-            ("a1", zeron_doc::MessageRole::Assistant, "partial output"),
-            ("u2", zeron_doc::MessageRole::User, "current request"),
-            ("u3", zeron_doc::MessageRole::User, "future pending request"),
-        ] {
-            doc.push_message(&zeron_doc::SessionMessageEntry {
-                id: id.into(),
-                role,
-                parts: vec![zeron_doc::MessagePart::Text {
-                    id: format!("{id}-text"),
-                    text: text.into(),
-                }],
-                created_at: 0,
-                device_id: "test".into(),
-                status: None,
-                continuation_of: None,
-                duration_ms: None,
-            })
-            .unwrap();
+        for prompt in ["/compact".to_owned(), command, native_skill.clone()] {
+            assert!(native_command(&prompt, HarnessId::Pi), "{prompt}");
         }
-        assert_eq!(
-            super::cursor_unstarted_history(&doc, "u1", "first interrupted request", false)
-                .unwrap(),
-            "first interrupted request"
-        );
-        let prompt = super::cursor_unstarted_history(&doc, "u2", "current request", false).unwrap();
-        assert!(prompt.contains("first interrupted request"));
-        assert!(prompt.contains("current request"));
-        assert!(!prompt.contains("partial output"));
-        assert!(!prompt.contains("future pending request"));
-        assert!(prompt.contains("do not rerun prior tools or side effects"));
-        assert_eq!(
-            super::cursor_unstarted_history(&doc, "u2", "current request", true).unwrap(),
-            "current request",
-            "content from the preceding turn is already in the native session"
-        );
-        assert!(
-            super::cursor_unstarted_history(&doc, "u3", "future pending request", true)
-                .unwrap()
-                .contains("current request"),
-            "an unacknowledged prompt after an older checkpoint must survive"
-        );
-        assert_eq!(doc.read_entries().unwrap().len(), 4);
+        // Inline and file-backed skill references are model input, so side
+        // chats must still receive their fork context with these prompts.
+        for prompt in [format!("Please use {native_skill}"), file_skill] {
+            assert!(!native_command(&prompt, HarnessId::Pi), "{prompt}");
+        }
+        assert!(!native_command("    /compact", HarnessId::Pi));
     }
-
-    use zeron_proto::{HarnessId, RunRequest, SandboxLevel};
 
     #[tokio::test]
     async fn generated_image_failure_is_sanitized_even_inside_subagents() {
@@ -3049,7 +2873,7 @@ mod tests {
             &mut parts,
             &AgentEvent::ToolCall {
                 id: "i".into(),
-                call: zeron_proto::ToolCall::Unknown {
+                call: paku_proto::ToolCall::Unknown {
                     name: "Generate image".into(),
                     input: None,
                 },
@@ -3087,8 +2911,8 @@ mod tests {
             mcp: None,
             prompt: "first".into(),
             harness: None,
-            model: Some("grok-4.6".into()),
-            reasoning: Some(zeron_proto::ReasoningLevel::High),
+            model: Some("mock-1".into()),
+            reasoning: Some(paku_proto::ReasoningLevel::High),
             model_options: serde_json::Map::new(),
             cwd: "/tmp".into(),
             sandbox: SandboxLevel::WorkspaceWrite,
@@ -3102,23 +2926,48 @@ mod tests {
     #[test]
     fn live_routing_requires_the_same_runtime_configuration() {
         let initial = request();
-        let config = RuntimeConfig::from_request(HarnessId::Grok, &initial);
+        let config = RuntimeConfig::from_request(HarnessId::Mock, &initial);
+        assert!(!config.can_route(HarnessId::Pi, &initial));
 
         let mut follow_up = initial.clone();
         follow_up.prompt = "second".into();
         follow_up.resume = Some("session-1".into());
-        assert!(config.can_route(HarnessId::Grok, &follow_up));
+        assert!(config.can_route(HarnessId::Mock, &follow_up));
 
-        follow_up.model = Some("grok-4.5".into());
-        assert!(!config.can_route(HarnessId::Grok, &follow_up));
+        follow_up.model = Some("mock-2".into());
+        assert!(!config.can_route(HarnessId::Mock, &follow_up));
         follow_up.model = initial.model.clone();
 
-        follow_up.reasoning = Some(zeron_proto::ReasoningLevel::Medium);
-        assert!(!config.can_route(HarnessId::Grok, &follow_up));
+        follow_up.reasoning = Some(paku_proto::ReasoningLevel::Medium);
+        assert!(!config.can_route(HarnessId::Mock, &follow_up));
         follow_up.reasoning = initial.reasoning;
 
         follow_up.attachments.push("/tmp/image.png".into());
-        assert!(!config.can_route(HarnessId::Grok, &follow_up));
+        assert!(!config.can_route(HarnessId::Mock, &follow_up));
+
+        for changed in [
+            RunRequest {
+                cwd: "/another/project".into(),
+                ..initial.clone()
+            },
+            RunRequest {
+                sandbox: SandboxLevel::ReadOnly,
+                ..initial.clone()
+            },
+            RunRequest {
+                auto_approve: false,
+                ..initial.clone()
+            },
+            RunRequest {
+                model_options: serde_json::Map::from_iter([(
+                    "thinking".into(),
+                    serde_json::json!("enabled"),
+                )]),
+                ..initial.clone()
+            },
+        ] {
+            assert!(!config.can_route(HarnessId::Mock, &changed));
+        }
     }
 
     #[test]
@@ -3156,7 +3005,7 @@ mod tests {
     async fn subagent_sink_flush_clears_dirty_when_nothing_folded() {
         use super::*;
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(zeron_sync::DocsStore::open(dir.path()).unwrap());
+        let store = Arc::new(paku_sync::DocsStore::open(dir.path()).unwrap());
         let host = DocHost::new(
             store,
             crate::doc_host::DocHostConfig {
@@ -3199,13 +3048,13 @@ mod tests {
         fn supports_steering(&self) -> bool {
             true
         }
-        fn steering_mode(&self) -> zeron_proto::SteeringMode {
-            zeron_proto::SteeringMode::StepBoundary
+        fn steering_mode(&self) -> paku_proto::SteeringMode {
+            paku_proto::SteeringMode::StepBoundary
         }
-        fn reasoning_levels(&self) -> &[zeron_proto::ReasoningLevel] {
-            &[zeron_proto::ReasoningLevel::Medium]
+        fn reasoning_levels(&self) -> &[paku_proto::ReasoningLevel] {
+            &[paku_proto::ReasoningLevel::Medium]
         }
-        async fn models(&self) -> Result<Vec<zeron_proto::Model>, zeron_harness::HarnessError> {
+        async fn models(&self) -> Result<Vec<paku_proto::Model>, paku_harness::HarnessError> {
             Ok(vec![])
         }
         async fn run(
@@ -3213,8 +3062,8 @@ mod tests {
             _request: RunRequest,
             _controls: RunControls,
         ) -> Result<
-            futures::stream::BoxStream<'static, Result<AgentEvent, zeron_harness::HarnessError>>,
-            zeron_harness::HarnessError,
+            futures::stream::BoxStream<'static, Result<AgentEvent, paku_harness::HarnessError>>,
+            paku_harness::HarnessError,
         > {
             let mut feed = self
                 .feed

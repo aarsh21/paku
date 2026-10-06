@@ -11,8 +11,8 @@
 use super::*;
 use crate::pickers::{breadcrumbs, browser_rows, completion_prefix_len, parent_path};
 use gpui::{FocusHandle, Window};
+use paku_proto::{ChatIndicator, Device, DriveEntry, DriveListing, FolderListing, Space};
 use std::collections::HashSet;
-use zeron_proto::{ChatIndicator, Device, DriveEntry, DriveListing, FolderListing, Space};
 
 /// Promote the user's ordered pins above the untouched activity projection.
 /// Every unpinned id keeps exactly the relative order supplied by recency.
@@ -192,8 +192,8 @@ pub(super) fn pinned_drag_scroll_delta(
 
 #[cfg(test)]
 mod pinned_session_tests {
-    fn pin_change(id: &str) -> zeron_proto::SidebarPinChange {
-        zeron_proto::SidebarPinChange::Pin {
+    fn pin_change(id: &str) -> paku_proto::SidebarPinChange {
+        paku_proto::SidebarPinChange::Pin {
             session_id: id.into(),
             after: None,
             before: None,
@@ -238,7 +238,7 @@ mod pinned_session_tests {
                     edge_token: None,
                     org_id: None,
                     workos_client_id: None,
-                    default_harness: zeron_proto::HarnessId::Mock,
+                    default_harness: paku_proto::HarnessId::Mock,
                 },
                 cx,
             )
@@ -246,9 +246,9 @@ mod pinned_session_tests {
     }
 
     fn remote_pin_state(state: &mut super::AppState, synced: bool, initialized: bool) {
-        state.workspace_scope = Some(zeron_proto::WorkspaceScope::Synced);
-        state.auth = Some(zeron_proto::AuthState::SignedIn {
-            user: zeron_proto::UserProfile {
+        state.workspace_scope = Some(paku_proto::WorkspaceScope::Synced);
+        state.auth = Some(paku_proto::AuthState::SignedIn {
+            user: paku_proto::UserProfile {
                 id: "user".into(),
                 email: "test@example.com".into(),
                 name: None,
@@ -259,7 +259,7 @@ mod pinned_session_tests {
         state.sidebar_preferences.initialized = initialized;
     }
 
-    fn pin_test_chat(id: &str) -> zeron_proto::Chat {
+    fn pin_test_chat(id: &str) -> paku_proto::Chat {
         serde_json::from_value(serde_json::json!({
             "id": id, "title": id, "deviceId": "local", "archived": false,
             "createdAt": chrono::Utc::now(),
@@ -275,14 +275,14 @@ mod pinned_session_tests {
         let (out, requests) = tokio::sync::mpsc::channel(16);
         let (replies, inbound) = tokio::sync::mpsc::channel(16);
         (
-            crate::state::EngineHandle::from_test_client(zeron_rpc::RpcClient::new(out, inbound)),
+            crate::state::EngineHandle::from_test_client(paku_rpc::RpcClient::new(out, inbound)),
             requests,
             replies,
         )
     }
 
-    fn pin_snapshot(revision: u64, pins: &[&str]) -> zeron_proto::SidebarPreferencesState {
-        zeron_proto::SidebarPreferencesState {
+    fn pin_snapshot(revision: u64, pins: &[&str]) -> paku_proto::SidebarPreferencesState {
+        paku_proto::SidebarPreferencesState {
             sections: vec![],
             revision,
             synced: true,
@@ -660,7 +660,7 @@ mod pinned_session_tests {
                     let id = shell.sidebar_pin_write.as_ref().unwrap().id;
                     shell.state.update(cx, |state, _| {
                         if change_profile {
-                            state.workspace_scope = Some(zeron_proto::WorkspaceScope::Local);
+                            state.workspace_scope = Some(paku_proto::WorkspaceScope::Local);
                         } else {
                             state.set_test_engine(replacement);
                         }
@@ -765,7 +765,7 @@ mod pinned_session_tests {
         let window = pin_test_shell(cx, dir.path());
         window
             .update(cx, |shell, window, cx| {
-                let saved: Vec<String> = (0..zeron_proto::MAX_SIDEBAR_PINS)
+                let saved: Vec<String> = (0..paku_proto::MAX_SIDEBAR_PINS)
                     .map(|n| format!("hidden-{n}"))
                     .collect();
                 for remote in [false, true] {
@@ -838,7 +838,7 @@ mod pinned_session_tests {
                     cx
                 ));
                 assert!(!shell.validate_sidebar_pin_change(&key, &ids(&[""]), cx));
-                let saved: Vec<_> = (0..zeron_proto::MAX_SIDEBAR_PINS)
+                let saved: Vec<_> = (0..paku_proto::MAX_SIDEBAR_PINS)
                     .map(|n| format!("pin-{n}"))
                     .collect();
                 let reordered = super::sidebar_session_drop_pins(
@@ -1116,7 +1116,7 @@ mod pinned_session_tests {
                         edge_token: None,
                         org_id: None,
                         workos_client_id: None,
-                        default_harness: zeron_proto::HarnessId::Mock,
+                        default_harness: paku_proto::HarnessId::Mock,
                     },
                     cx,
                 );
@@ -1236,7 +1236,7 @@ mod pinned_session_tests {
                         edge_token: None,
                         org_id: None,
                         workos_client_id: None,
-                        default_harness: zeron_proto::HarnessId::Mock,
+                        default_harness: paku_proto::HarnessId::Mock,
                     },
                     cx,
                 );
@@ -1317,7 +1317,10 @@ mod pinned_session_tests {
             // The globe/archive slot is always reserved, so hovering swaps its
             // glyph in place: the title keeps its width and the status and time
             // columns never move.
-            assert_eq!(cx.debug_bounds("chat-title-older").unwrap().size.width, title.size.width);
+            assert_eq!(
+                cx.debug_bounds("chat-title-older").unwrap().size.width,
+                title.size.width
+            );
             assert_eq!(cx.debug_bounds("chat-status-older").unwrap(), status);
             assert_eq!(cx.debug_bounds("chat-time-older").unwrap(), time);
         }
@@ -1643,7 +1646,7 @@ mod pinned_session_tests {
             for id in shell.active_sidebar_pins(cx) {
                 shell.apply_sidebar_pin_change(
                     key.clone(),
-                    zeron_proto::SidebarPinChange::Unpin { session_id: id },
+                    paku_proto::SidebarPinChange::Unpin { session_id: id },
                     cx,
                 );
             }
@@ -1742,7 +1745,7 @@ mod pinned_session_tests {
                         edge_token: None,
                         org_id: None,
                         workos_client_id: None,
-                        default_harness: zeron_proto::HarnessId::Mock,
+                        default_harness: paku_proto::HarnessId::Mock,
                     },
                     cx,
                 );
@@ -2029,17 +2032,17 @@ pub(super) fn pinned_drag_snapshot_is_valid(
 
 struct ActiveChatRow {
     status: ChatIndicator,
-    chat: zeron_proto::Chat,
+    chat: paku_proto::Chat,
     folder: String,
     branch: Option<String>,
-    change_request: Option<zeron_proto::ChangeRequestSummary>,
+    change_request: Option<paku_proto::ChangeRequestSummary>,
     group: Option<(String, String)>,
 }
 
 pub(super) fn compare_sidebar_chats(
     sort: SidebarSort,
-    left: &zeron_proto::Chat,
-    right: &zeron_proto::Chat,
+    left: &paku_proto::Chat,
+    right: &paku_proto::Chat,
 ) -> std::cmp::Ordering {
     let primary = match sort {
         SidebarSort::Created => right.created_at.cmp(&left.created_at),
@@ -2182,10 +2185,10 @@ fn promote_local_device_group<T>(
 /// Project-mode group of a chat as (key, label). Projects sharing a
 /// repository identity fold into one group named for their representative
 /// space; project-less sessions group per device and read as `~`.
-fn sidebar_project_group(state: &AppState, chat: &zeron_proto::Chat) -> (String, String) {
+fn sidebar_project_group(state: &AppState, chat: &paku_proto::Chat) -> (String, String) {
     match state.space_for_chat(chat) {
         Some(space) => (
-            zeron_proto::view::project_key(space),
+            paku_proto::view::project_key(space),
             state.representative_space(space).display_name().to_string(),
         ),
         None => match chat.space_id.clone() {
@@ -2923,20 +2926,20 @@ impl Shell {
             let after = index.checked_sub(1).and_then(|i| next.get(i)).cloned();
             let before = next.get(index + 1).cloned();
             if saved.contains(&payload.chat_id) {
-                zeron_proto::SidebarPinChange::Move {
+                paku_proto::SidebarPinChange::Move {
                     session_id: payload.chat_id.clone(),
                     after,
                     before,
                 }
             } else {
-                zeron_proto::SidebarPinChange::Pin {
+                paku_proto::SidebarPinChange::Pin {
                     session_id: payload.chat_id.clone(),
                     after,
                     before,
                 }
             }
         } else {
-            zeron_proto::SidebarPinChange::Unpin {
+            paku_proto::SidebarPinChange::Unpin {
                 session_id: payload.chat_id.clone(),
             }
         };
@@ -2944,7 +2947,7 @@ impl Shell {
             && !matches!(target, SidebarSessionDrop::Pinned(_))
         {
             if !self.change_sidebar_section(
-                zeron_proto::SidebarSectionChange::Assign {
+                paku_proto::SidebarSectionChange::Assign {
                     session_id: payload.chat_id.clone(),
                     section_id: target_section.map(str::to_owned),
                 },
@@ -3230,7 +3233,12 @@ impl Shell {
         let projects = state.projects();
         let names: Vec<String> = projects
             .iter()
-            .map(|members| state.representative_space(members[0]).display_name().to_string())
+            .map(|members| {
+                state
+                    .representative_space(members[0])
+                    .display_name()
+                    .to_string()
+            })
             .collect();
         let mut rows: Vec<SpacesMenuRow> = Vec::new();
         if query.trim().is_empty() {
@@ -3252,7 +3260,7 @@ impl Shell {
         Some(
             state
                 .space_row(id)
-                .map_or_else(|| id.to_owned(), zeron_proto::view::project_key),
+                .map_or_else(|| id.to_owned(), paku_proto::view::project_key),
         )
     }
 
@@ -3261,7 +3269,7 @@ impl Shell {
         self.state
             .read(cx)
             .space_row(id)
-            .map_or_else(|| id.to_owned(), zeron_proto::view::project_key)
+            .map_or_else(|| id.to_owned(), paku_proto::view::project_key)
     }
 
     fn open_spaces_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -4173,7 +4181,7 @@ impl Shell {
                     ),
                     SpacesMenuRow::Space(id) => match state.space_row(&id) {
                         Some(space) => {
-                            let key = zeron_proto::view::project_key(space);
+                            let key = paku_proto::view::project_key(space);
                             let selected = filter_key.as_deref() == Some(key.as_str());
                             let members = state.project_members(space);
                             let (tag, offline) = state.project_device_tag(&members, Utc::now());
@@ -4356,7 +4364,7 @@ impl Shell {
             .as_ref()
             .map_or(saved_pins.as_slice(), |ids| ids.as_slice());
         let state = self.state.read(cx);
-        let mut chats: Vec<zeron_proto::Chat> = state
+        let mut chats: Vec<paku_proto::Chat> = state
             .sidebar_chats(Utc::now(), filter.as_deref())
             .into_iter()
             .map(|(_, chat)| chat.clone())
@@ -4386,7 +4394,7 @@ impl Shell {
             })
             .collect();
         let ordered = if self.settings.sidebar_organization != SidebarOrganization::InOneList {
-            let mut groups: Vec<(Option<(String, String)>, Vec<zeron_proto::Chat>)> = Vec::new();
+            let mut groups: Vec<(Option<(String, String)>, Vec<paku_proto::Chat>)> = Vec::new();
             for chat in chats {
                 let key = Some((
                     if self.settings.sidebar_organization == SidebarOrganization::ByProject {
@@ -4434,7 +4442,7 @@ impl Shell {
 
     /// The group a chat's row sits under when the sidebar groups by device or
     /// by project; `None` in one list.
-    fn sidebar_group_key(&self, state: &AppState, chat: &zeron_proto::Chat) -> Option<String> {
+    fn sidebar_group_key(&self, state: &AppState, chat: &paku_proto::Chat) -> Option<String> {
         match self.settings.sidebar_organization {
             SidebarOrganization::ByDevice => Some(chat.device_id.clone()),
             SidebarOrganization::ByProject => Some(sidebar_project_group(state, chat).0),
@@ -4490,7 +4498,7 @@ impl Shell {
             {
                 if section.collapsed {
                     if !self.change_sidebar_section(
-                        zeron_proto::SidebarSectionChange::Collapse {
+                        paku_proto::SidebarSectionChange::Collapse {
                             id: section.id.clone(),
                             collapsed: false,
                         },
@@ -4553,7 +4561,7 @@ impl Shell {
     fn sidebar_chat_data(
         &self,
         status: ChatIndicator,
-        chat: zeron_proto::Chat,
+        chat: paku_proto::Chat,
         state: &AppState,
     ) -> ActiveChatRow {
         // Line 1 is "project @ device" (t3code's project row);
@@ -5080,8 +5088,10 @@ impl Shell {
                     state
                         .spaces
                         .iter()
-                        .find(|space| zeron_proto::view::project_key(space) == key)
-                        .and_then(|space| state.project_members(space).first().map(|m| m.id.clone()))
+                        .find(|space| paku_proto::view::project_key(space) == key)
+                        .and_then(|space| {
+                            state.project_members(space).first().map(|m| m.id.clone())
+                        })
                 })
                 .flatten();
             let new_chat_button = group_space.map(|project| {
@@ -5115,24 +5125,29 @@ impl Shell {
                     )
                     .into_any_element()
             });
-            let header =
-                sidebar_disclosure_header(theme, group_icon, visible_label, new_chat_button, chevron)
-                    .group(group_name)
-                .id(SharedString::from(format!("sidebar-group-{collapse_key}")))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    let was_open = !this.sidebar_collapsed_groups.contains(&toggle_key);
-                    this.begin_sidebar_disclosure_motion(
-                        &toggle_motion_key,
-                        if was_open { body_height } else { 0.0 },
-                        if was_open { 0.0 } else { body_height },
-                    );
-                    if was_open {
-                        this.sidebar_collapsed_groups.insert(toggle_key.clone());
-                    } else {
-                        this.sidebar_collapsed_groups.remove(&toggle_key);
-                    }
-                    cx.notify();
-                }));
+            let header = sidebar_disclosure_header(
+                theme,
+                group_icon,
+                visible_label,
+                new_chat_button,
+                chevron,
+            )
+            .group(group_name)
+            .id(SharedString::from(format!("sidebar-group-{collapse_key}")))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let was_open = !this.sidebar_collapsed_groups.contains(&toggle_key);
+                this.begin_sidebar_disclosure_motion(
+                    &toggle_motion_key,
+                    if was_open { body_height } else { 0.0 },
+                    if was_open { 0.0 } else { body_height },
+                );
+                if was_open {
+                    this.sidebar_collapsed_groups.insert(toggle_key.clone());
+                } else {
+                    this.sidebar_collapsed_groups.remove(&toggle_key);
+                }
+                cx.notify();
+            }));
             let body = self.render_sidebar_disclosure_body(
                 &motion_key,
                 !collapsed,
@@ -5318,10 +5333,10 @@ impl Shell {
     }
 
     /// The Archived shelf's chats under the project filter, in sidebar order.
-    fn archived_sidebar_chats(&self, cx: &App) -> Vec<zeron_proto::Chat> {
+    fn archived_sidebar_chats(&self, cx: &App) -> Vec<paku_proto::Chat> {
         let state = self.state.read(cx);
         let in_filter = state.project_filter(self.settings.space_filter.as_deref());
-        let mut rows: Vec<zeron_proto::Chat> = state
+        let mut rows: Vec<paku_proto::Chat> = state
             .chats
             .iter()
             // Spawned children stay out of the Archived section too — the
@@ -5705,7 +5720,7 @@ impl Shell {
 
     /// The current listing's folder rows filtered by the search query
     /// (prefix matches first — `popover::filter_indices`).
-    fn add_space_filtered(&self, cx: &App) -> Vec<zeron_proto::FolderEntry> {
+    fn add_space_filtered(&self, cx: &App) -> Vec<paku_proto::FolderEntry> {
         let Some(flow) = self.add_space.as_ref() else {
             return Vec::new();
         };
@@ -6976,8 +6991,8 @@ mod tests {
         (Some((device.into(), device.into())), vec![value])
     }
 
-    fn chat(id: &str) -> zeron_proto::Chat {
-        zeron_proto::Chat {
+    fn chat(id: &str) -> paku_proto::Chat {
+        paku_proto::Chat {
             id: id.into(),
             device_id: "device".into(),
             title: None,
@@ -7039,7 +7054,7 @@ mod tests {
 #[cfg(feature = "project-palette-fixture")]
 impl Shell {
     pub fn fixture_project_responses(&mut self, cx: &mut Context<Self>) {
-        if std::env::var_os("ZERON_FIXTURE_BACKGROUND").is_some() {
+        if std::env::var_os("PAKU_FIXTURE_BACKGROUND").is_some() {
             self.composer
                 .read(cx)
                 .pickers()
@@ -7152,7 +7167,7 @@ mod project_flow_tests {
                     edge_token: None,
                     org_id: None,
                     workos_client_id: None,
-                    default_harness: zeron_proto::HarnessId::Mock,
+                    default_harness: paku_proto::HarnessId::Mock,
                 },
                 cx,
             )

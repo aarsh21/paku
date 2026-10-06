@@ -1,4 +1,4 @@
-//! Workspace doc schema over `loro` — the per-org entity index that replaces zeron's
+//! Workspace doc schema over `loro` — the per-org entity index that replaces paku's
 //! residual entity sync (ARCHITECTURE.md §2.2). Lives in its own DO room (same
 //! SessionRoom class, doc id `ws/{orgId}`).
 //!
@@ -17,18 +17,18 @@
 //!
 //! Writer discipline (ARCHITECTURE §2.2): each device writes its own device row, its
 //! own session rows, and rows for chats it hosts; title/archived renames are LWW map
-//! sets from any device — matching zeron's Mutate surface. Presence rides the room's
+//! sets from any device — matching paku's Mutate surface. Presence rides the room's
 //! `EphemeralStore` under keys `presence/{deviceId}` (an online timestamp), replacing
-//! zeron's 15s heartbeat writes so liveness never grows the oplog.
+//! paku's 15s heartbeat writes so liveness never grows the oplog.
 //!
 //! Timestamps are stored as epoch millis (the session-doc convention) and surface as
-//! `chrono::DateTime<Utc>` through the `zeron_proto` entity types.
+//! `chrono::DateTime<Utc>` through the `paku_proto` entity types.
 
 use chrono::{DateTime, Utc};
 use loro::{ExportMode, LoroDoc, LoroMap, LoroValue, ToJson};
 use serde::{Deserialize, Serialize};
 
-use zeron_proto::{Chat, ChatConfig, Device, Session, SessionStatus, Space};
+use paku_proto::{Chat, ChatConfig, Device, Session, SessionStatus, Space};
 
 use crate::schema::DocError;
 
@@ -106,14 +106,6 @@ impl WorkspaceDoc {
         set_opt_ms(&row, "lastSeenAt", device.last_seen_at)?;
         set_opt_ms(&row, "createdAt", device.created_at)?;
         set_opt_str(&row, "version", device.version.as_deref())?;
-        set_opt_str(
-            &row,
-            "cursorSdkVersion",
-            device.cursor_sdk_version.as_deref(),
-        )?;
-        // An old engine can update its app version without knowing SDK fields.
-        // Treat retained SDK metadata as unknown after such a downgrade.
-        set_opt_str(&row, "cursorSdkEngineVersion", device.version.as_deref())?;
         row.insert(
             "capabilities",
             crate::schema::loro_value_from_json(&serde_json::json!(&device.capabilities)),
@@ -374,7 +366,7 @@ impl WorkspaceDoc {
     pub fn set_chat_source_context(
         &self,
         chat_id: &str,
-        context: &zeron_proto::ConversationSourceContext,
+        context: &paku_proto::ConversationSourceContext,
     ) -> Result<bool, DocError> {
         let Some(row) = self.existing_row("chats", chat_id) else {
             return Ok(false);
@@ -424,7 +416,7 @@ impl WorkspaceDoc {
     }
 
     /// Host-side resume continuity: the harness-native session id of the chat's
-    /// latest run and the cwd it was created under (zeron stored the same pair
+    /// latest run and the cwd it was created under (paku stored the same pair
     /// on the chats table). An empty
     /// `session_id` is the explicit "do not resume" tombstone written after a
     /// harness rejects a resume. `false` when no such row.
@@ -618,18 +610,11 @@ pub(crate) struct RawDevice {
     #[serde(default)]
     version: Option<String>,
     #[serde(default)]
-    cursor_sdk_version: Option<String>,
-    #[serde(default)]
-    cursor_sdk_engine_version: Option<String>,
-    #[serde(default)]
     capabilities: Vec<String>,
 }
 
 impl From<RawDevice> for Device {
     fn from(raw: RawDevice) -> Self {
-        let sdk_version = raw
-            .cursor_sdk_version
-            .filter(|_| raw.version.is_some() && raw.version == raw.cursor_sdk_engine_version);
         Device {
             id: raw.id,
             name: raw.name,
@@ -637,7 +622,6 @@ impl From<RawDevice> for Device {
             last_seen_at: raw.last_seen_at.map(dt),
             created_at: raw.created_at.map(dt),
             version: raw.version,
-            cursor_sdk_version: sdk_version,
             capabilities: raw.capabilities,
         }
     }
@@ -695,13 +679,10 @@ pub(crate) struct RawChat {
     #[serde(default)]
     checkout_id: Option<String>,
     #[serde(default)]
-    source_context: Option<zeron_proto::ConversationSourceContext>,
-    /// LENIENT: a config this build can't decode (a harness/reasoning/sandbox
-    /// id from a NEWER peer — field incident: pre-v0.2.10 laptops dropped
-    /// every `"opencode"` chat row wholesale, so new sessions silently never
-    /// appeared in the sidebar) degrades to `None` instead of failing the
-    /// row. The chat stays visible and selectable with generic defaults;
-    /// up-to-date devices still see the real config.
+    source_context: Option<paku_proto::ConversationSourceContext>,
+    /// LENIENT: an unsupported harness/reasoning/sandbox config degrades to
+    /// `None`, keeping the historical chat visible without accepting legacy
+    /// harness ids or translating them into Pi configurations.
     #[serde(default, deserialize_with = "lenient_chat_config")]
     config: Option<ChatConfig>,
     #[serde(default)]
@@ -797,7 +778,7 @@ impl From<RawSession> for Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zeron_proto::{HarnessId, SandboxLevel};
+    use paku_proto::{HarnessId, SandboxLevel};
 
     fn ts(ms: i64) -> DateTime<Utc> {
         dt(ms)
@@ -811,39 +792,8 @@ mod tests {
             last_seen_at: Some(ts(1_000)),
             created_at: Some(ts(500)),
             version: Some("0.1.0".into()),
-            cursor_sdk_version: None,
             capabilities: Vec::new(),
         }
-    }
-
-    #[test]
-    fn remote_sdk_version_survives_sync_and_old_engines_remain_unknown() {
-        let local = WorkspaceDoc::new();
-        let mut row = device("remote", "remote engine");
-        row.cursor_sdk_version = Some("1.0.31".into());
-        local.upsert_device(&row).unwrap();
-        let remote = WorkspaceDoc::new();
-        remote
-            .doc()
-            .import(&local.export_snapshot().unwrap())
-            .unwrap();
-        assert_eq!(
-            remote.read_devices().unwrap()[0]
-                .cursor_sdk_version
-                .as_deref(),
-            Some("1.0.31")
-        );
-        // Simulate an older writer that only knows the app-version field.
-        remote
-            .row("devices", "remote")
-            .unwrap()
-            .insert("version", "0.0.1")
-            .unwrap();
-        remote.doc().commit();
-        assert_eq!(remote.read_devices().unwrap()[0].cursor_sdk_version, None);
-        row.cursor_sdk_version = None;
-        remote.upsert_device(&row).unwrap();
-        assert_eq!(remote.read_devices().unwrap()[0].cursor_sdk_version, None);
     }
 
     fn chat(id: &str, device_id: &str) -> Chat {
@@ -857,8 +807,8 @@ mod tests {
             checkout_id: None,
             source_context: None,
             config: Some(ChatConfig {
-                harness: HarnessId::Mock,
-                model: Some("mock-1".into()),
+                harness: HarnessId::Pi,
+                model: Some("default".into()),
                 reasoning: None,
                 model_options: Default::default(),
                 sandbox: SandboxLevel::WorkspaceWrite,
@@ -919,13 +869,13 @@ mod tests {
         ws.upsert_chat(&chat("chat-1", "dev-a")).unwrap();
         let mut options = serde_json::Map::new();
         options.insert(
-            "contextWindow".into(),
-            serde_json::Value::String("1m".into()),
+            "pi_thinking".into(),
+            serde_json::Value::String("off".into()),
         );
         let config = ChatConfig {
-            harness: HarnessId::ClaudeCode,
-            model: Some("claude-fable-5".into()),
-            reasoning: Some(zeron_proto::ReasoningLevel::XHigh),
+            harness: HarnessId::Pi,
+            model: Some("anthropic/claude-fable-5".into()),
+            reasoning: Some(paku_proto::ReasoningLevel::XHigh),
             model_options: options,
             sandbox: SandboxLevel::WorkspaceWrite,
         };
@@ -941,7 +891,7 @@ mod tests {
     fn conversation_source_context_round_trips_with_legacy_fields() {
         let ws = WorkspaceDoc::new();
         ws.upsert_chat(&chat("chat-1", "dev-a")).unwrap();
-        let context = zeron_proto::ConversationSourceContext {
+        let context = paku_proto::ConversationSourceContext {
             checkout_id: "checkout-a".into(),
             repo_root: "/repo".into(),
             cwd: "/repo/worktree".into(),
@@ -977,7 +927,7 @@ mod tests {
     fn rows_round_trip() {
         let ws = WorkspaceDoc::new();
         let mut device = device("dev-a", "laptop");
-        device.capabilities = vec![zeron_proto::capabilities::MESSAGE_QUEUE_V1.into()];
+        device.capabilities = vec![paku_proto::capabilities::MESSAGE_QUEUE_V1.into()];
         ws.upsert_device(&device).unwrap();
         ws.upsert_chat(&chat("chat-1", "dev-a")).unwrap();
         ws.upsert_session(&session("chat-1", "dev-a", SessionStatus::Working))

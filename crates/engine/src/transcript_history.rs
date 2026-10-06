@@ -5,9 +5,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use loro::{Container, ContainerID, EventTriggerKind, Index, LoroDoc, LoroValue, ValueOrContainer};
-use zeron_doc::{SessionMessageEntry, TranscriptBaseline};
+use paku_doc::{SessionMessageEntry, TranscriptBaseline};
 
-pub(crate) const REPLAY_ORIGIN: &str = "zeron:transcript-replay";
+pub(crate) const REPLAY_ORIGIN: &str = "paku:transcript-replay";
 
 #[derive(Default)]
 struct Part {
@@ -136,8 +136,8 @@ impl TranscriptHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paku_doc::{MessagePart, MessageRole, MessageStatus, SegmentWriter, SessionDoc};
     use std::sync::Mutex;
-    use zeron_doc::{MessagePart, MessageRole, MessageStatus, SegmentWriter, SessionDoc};
 
     fn entry(id: &str) -> SessionMessageEntry {
         SessionMessageEntry {

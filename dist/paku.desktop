@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Paku
+GenericName=Coding Agent Controller
+Comment=Multi-device coding workspace powered by Pi
+Exec=paku %u
+TryExec=paku
+Icon=paku
+Terminal=false
+StartupNotify=true
+Categories=Development;Utility;
+Keywords=paku;pi;agent;ai;coding;
+StartupWMClass=paku
+MimeType=x-scheme-handler/paku;

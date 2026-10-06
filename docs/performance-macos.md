@@ -1,5 +1,7 @@
 # Native macOS resource follow-up
 
+> Historical upstream **Zeron** evidence, not Paku verification. Recorded revisions, paths and hashes are preserved; reproduction commands apply only to those upstream revisions. Current Paku verification: `scripts/verify-paku.sh`.
+
 For the subsequent v0.2.39 native scrolling crash, stuck-send recovery and
 populated-chat measurements, see the [stability follow-up](performance-macos-stability.md).
 The measurements below predate those regressions and do not establish stability

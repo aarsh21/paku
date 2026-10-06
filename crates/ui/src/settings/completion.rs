@@ -3,7 +3,7 @@
 use super::HarnessesPage;
 use crate::{settings, settings::widgets, theme::Theme};
 use gpui::{AnyElement, Context, div, prelude::*, px};
-use zeron_proto::HarnessId;
+use paku_proto::HarnessId;
 
 impl HarnessesPage {
     fn toggle_completion(&mut self, harness: HarnessId, dollar: bool, cx: &mut Context<Self>) {
@@ -106,34 +106,29 @@ mod completion_tests {
     use super::*;
 
     #[gpui::test]
-    fn completion_preferences_save_independently_per_agent(cx: &mut gpui::TestAppContext) {
+    fn pi_completion_preferences_save_independently_per_trigger(cx: &mut gpui::TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         cx.update(|cx| settings::init(Default::default(), dir.path(), cx));
         let state = cx.new(|_| crate::state::AppState::new());
         let page = cx.new(|cx| HarnessesPage::new(state, cx));
         page.update(cx, |page, cx| {
-            page.toggle_completion(HarnessId::ClaudeCode, true, cx);
-            page.toggle_completion(HarnessId::ClaudeCode, false, cx);
-            page.toggle_completion(HarnessId::Opencode, true, cx);
+            page.toggle_completion(HarnessId::Pi, true, cx);
+            assert!(
+                settings::current(cx)
+                    .skill_completion(HarnessId::Pi)
+                    .separate_from_slash
+            );
+            page.toggle_completion(HarnessId::Pi, false, cx);
         });
         // Both default on, so each flip turns its own preference off.
         let loaded = settings::UiSettings::load(dir.path());
-        assert!(!loaded.skill_completion(HarnessId::ClaudeCode).dollar);
-        assert!(
-            !loaded
-                .skill_completion(HarnessId::ClaudeCode)
-                .separate_from_slash
-        );
-        assert!(!loaded.skill_completion(HarnessId::Opencode).dollar);
-        assert!(
-            loaded
-                .skill_completion(HarnessId::Opencode)
-                .separate_from_slash
-        );
+        assert!(!loaded.skill_completion(HarnessId::Pi).dollar);
+        assert!(!loaded.skill_completion(HarnessId::Pi).separate_from_slash);
+        assert_eq!(loaded.skill_completion_by_harness.len(), 1);
         assert!(
             loaded
                 .skill_completion_by_harness
-                .contains_key(&HarnessId::ClaudeCode)
+                .contains_key(&HarnessId::Pi)
         );
     }
 }

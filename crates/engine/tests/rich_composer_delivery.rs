@@ -8,32 +8,21 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::{StreamExt, stream::BoxStream};
-use tokio::sync::mpsc;
-use zeron_doc::{MessagePart, MessageRole};
-use zeron_engine::doc_host::{
-    BeginQueueEditOutcome, FinishQueueEditAction, FinishQueueEditOutcome,
-};
-use zeron_engine::{EngineCore, HarnessRegistry, SteerOutcome};
-use zeron_harness::{Harness, HarnessError, RunControls};
-use zeron_proto::invocation::Invocation;
-use zeron_proto::{
+use paku_doc::{MessagePart, MessageRole};
+use paku_engine::doc_host::{BeginQueueEditOutcome, FinishQueueEditAction, FinishQueueEditOutcome};
+use paku_engine::{EngineCore, HarnessRegistry, SteerOutcome};
+use paku_harness::{Harness, HarnessError, RunControls};
+use paku_proto::invocation::Invocation;
+use paku_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SandboxLevel,
     SteeringMode,
 };
-use zeron_rpc::RpcService;
+use paku_rpc::RpcService;
+use tokio::sync::mpsc;
 
 const CHAT: &str = "rich-delivery";
-const HARNESSES: [HarnessId; 9] = [
-    HarnessId::ClaudeCode,
-    HarnessId::Codex,
-    HarnessId::Cursor,
-    HarnessId::Devin,
-    HarnessId::Grok,
-    HarnessId::Hermes,
-    HarnessId::Pi,
-    HarnessId::Antigravity,
-    HarnessId::Opencode,
-];
+// These are scripted identities, not real provider adapters.
+const HARNESSES: [HarnessId; 2] = [HarnessId::Pi, HarnessId::Mock];
 
 enum Delivery {
     Run(RunRequest),
@@ -81,9 +70,9 @@ impl Harness for RecordingHarness {
     async fn commands_for(
         &self,
         cwd: &std::path::Path,
-    ) -> Result<Vec<zeron_proto::SlashCommand>, HarnessError> {
+    ) -> Result<Vec<paku_proto::SlashCommand>, HarnessError> {
         self.discovery(cwd).await;
-        Ok(vec![zeron_proto::SlashCommand {
+        Ok(vec![paku_proto::SlashCommand {
             name: "probe".into(),
             description: cwd.to_string_lossy().into_owned(),
             input_hint: None,
@@ -92,9 +81,9 @@ impl Harness for RecordingHarness {
     async fn skills(
         &self,
         cwd: &std::path::Path,
-    ) -> Result<Option<Vec<zeron_proto::invocation::Skill>>, HarnessError> {
+    ) -> Result<Option<Vec<paku_proto::invocation::Skill>>, HarnessError> {
         self.discovery(cwd).await;
-        Ok(Some(vec![zeron_proto::invocation::Skill {
+        Ok(Some(vec![paku_proto::invocation::Skill {
             name: "probe".into(),
             path: cwd.join("SKILL.md").to_string_lossy().into_owned(),
             description: cwd.to_string_lossy().into_owned(),
@@ -168,7 +157,7 @@ fn rich_text(label: &str) -> (String, String) {
         command: None,
     }
     .link();
-    let file = zeron_proto::file_mentions::local_file_link("src/é file.rs", false);
+    let file = paku_proto::file_mentions::local_file_link("src/é file.rs", false);
     let raw = format!(
         "{label}: {skill} on {file}\n\n- **keep this markdown**\n- `literal @file $review /compact`"
     );
@@ -177,37 +166,8 @@ fn rich_text(label: &str) -> (String, String) {
     );
     (raw, readable)
 }
-fn expected(raw: &str, readable: &str, id: HarnessId) -> String {
-    if id == HarnessId::Codex {
-        raw.replace(
-            &zeron_proto::file_mentions::local_file_link("src/é file.rs", false),
-            "[é file.rs](src/%C3%A9%20file.rs)",
-        )
-    } else if id == HarnessId::Opencode {
-        // OpenCode receives canonical identity and converts it locally so a
-        // disappearing project command cannot become ordinary slash text.
-        raw.into()
-    } else {
-        readable.into()
-    }
-}
-fn assert_delivered(actual: &str, raw: &str, readable: &str, id: HarnessId) {
-    let expected = expected(raw, readable, id);
-    if id == HarnessId::Cursor
-        && let Some(json) = actual.strip_prefix("The preceding user messages may not have reached a Cursor checkpoint before startup stopped. Retain this JSON as conversation history; do not rerun prior tools or side effects. Respond to the current message.\n")
-    {
-        let history: serde_json::Value = serde_json::from_str(json)
-            .expect("rich selections must not corrupt Cursor's recovery JSON");
-        assert_eq!(history["currentUserMessage"], expected, "{id:?}");
-        assert!(
-            history["previousUserMessages"]
-                .as_array()
-                .is_some_and(|messages| !messages.is_empty()),
-            "Cursor recovery must retain the preceding canonical user turns"
-        );
-    } else {
-        assert_eq!(actual, expected, "{id:?}");
-    }
+fn assert_delivered(actual: &str, _raw: &str, readable: &str, id: HarnessId) {
+    assert_eq!(actual, readable, "{id:?}");
 }
 async fn receive(rx: &mut mpsc::UnboundedReceiver<Delivery>) -> Delivery {
     tokio::time::timeout(Duration::from_secs(10), rx.recv())
@@ -235,10 +195,10 @@ async fn setup(
     registry.register(harness.clone());
     let core =
         EngineCore::assemble(&tmp.path().join("data"), Arc::new(registry), id, None).unwrap();
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let client = paku_rpc::memory_client(core.rpc_service());
     client
         .call(
-            zeron_rpc::methods::MUTATE,
+            paku_rpc::methods::MUTATE,
             serde_json::json!({"op":"createChat", "chatId":CHAT, "deviceId":core.device_id}),
         )
         .await
@@ -293,7 +253,7 @@ async fn rich_selections_survive_fresh_warm_steer_and_attachment_delivery_for_ev
         let Delivery::Steer(text) = receive(&mut rx).await else {
             panic!("warm run must use mailbox")
         };
-        assert_eq!(text, expected(&warm, &readable, id), "{id:?}");
+        assert_delivered(&text, &warm, &readable, id);
         assert_persisted(&core, &warm, 2);
 
         let (steer, readable) = rich_text("steer");
@@ -304,7 +264,7 @@ async fn rich_selections_survive_fresh_warm_steer_and_attachment_delivery_for_ev
         let Delivery::Steer(text) = receive(&mut rx).await else {
             panic!("steer expected")
         };
-        assert_eq!(text, expected(&steer, &readable, id), "{id:?}");
+        assert_delivered(&text, &steer, &readable, id);
         assert_persisted(&core, &steer, 3);
 
         let (attached, readable) = rich_text("attachment");
@@ -432,21 +392,18 @@ async fn queue_edits_preserve_reselected_skills_until_delivery_for_every_harness
 
 #[tokio::test]
 async fn projectless_catalogs_use_the_session_directory_and_reject_unknown_targets() {
-    let (tmp, core, _harness, _rx) = setup(HarnessId::Codex).await;
-    let client = zeron_rpc::memory_client(core.rpc_service());
+    let (tmp, core, _harness, _rx) = setup(HarnessId::Pi).await;
+    let client = paku_rpc::memory_client(core.rpc_service());
     for method in [
-        zeron_rpc::methods::LIST_COMMANDS,
-        zeron_rpc::methods::LIST_SKILLS,
+        paku_rpc::methods::LIST_COMMANDS,
+        paku_rpc::methods::LIST_SKILLS,
     ] {
         let new_chat = client
-            .call(method, serde_json::json!({"harness":"codex"}))
+            .call(method, serde_json::json!({"harness":"pi"}))
             .await
             .unwrap();
         let existing_chat = client
-            .call(
-                method,
-                serde_json::json!({"harness":"codex", "chatId":CHAT}),
-            )
+            .call(method, serde_json::json!({"harness":"pi", "chatId":CHAT}))
             .await
             .unwrap();
         assert_eq!(
@@ -457,7 +414,7 @@ async fn projectless_catalogs_use_the_session_directory_and_reject_unknown_targe
             client
                 .call(
                     method,
-                    serde_json::json!({"harness":"codex", "chatId":"missing-chat"})
+                    serde_json::json!({"harness":"pi", "chatId":"missing-chat"})
                 )
                 .await
                 .is_err()
@@ -466,7 +423,7 @@ async fn projectless_catalogs_use_the_session_directory_and_reject_unknown_targe
             client
                 .call(
                     method,
-                    serde_json::json!({"harness":"codex", "chatId":CHAT, "path":"/tmp"})
+                    serde_json::json!({"harness":"pi", "chatId":CHAT, "path":"/tmp"})
                 )
                 .await
                 .is_err()
@@ -478,14 +435,11 @@ async fn projectless_catalogs_use_the_session_directory_and_reject_unknown_targe
         .set_chat_cwd(CHAT, cwd.to_str().unwrap())
         .unwrap();
     for method in [
-        zeron_rpc::methods::LIST_COMMANDS,
-        zeron_rpc::methods::LIST_SKILLS,
+        paku_rpc::methods::LIST_COMMANDS,
+        paku_rpc::methods::LIST_SKILLS,
     ] {
         let result = client
-            .call(
-                method,
-                serde_json::json!({"harness":"codex", "chatId":CHAT}),
-            )
+            .call(method, serde_json::json!({"harness":"pi", "chatId":CHAT}))
             .await
             .unwrap();
         assert_eq!(result[0]["description"], cwd.to_str().unwrap(), "{method}");
@@ -495,10 +449,10 @@ async fn projectless_catalogs_use_the_session_directory_and_reject_unknown_targe
 #[tokio::test]
 async fn project_catalog_rpcs_hold_update_leases_through_cancelled_discovery_cleanup() {
     for method in [
-        zeron_rpc::methods::LIST_COMMANDS,
-        zeron_rpc::methods::LIST_SKILLS,
+        paku_rpc::methods::LIST_COMMANDS,
+        paku_rpc::methods::LIST_SKILLS,
     ] {
-        let (tmp, core, harness, _rx) = setup(HarnessId::Codex).await;
+        let (tmp, core, harness, _rx) = setup(HarnessId::Pi).await;
         let root = tmp.path().join("project-catalog");
         std::fs::create_dir(&root).unwrap();
         let root = root.canonicalize().unwrap();
@@ -511,15 +465,12 @@ async fn project_catalog_rpcs_hold_update_leases_through_cancelled_discovery_cle
             release: tokio::sync::Notify::new(),
         });
         *harness.discovery_gate.lock().unwrap() = Some(gate.clone());
-        core.registry.begin_update(HarnessId::Codex);
-        let installation = core.registry.update_lease(HarnessId::Codex).await;
+        core.registry.begin_update(HarnessId::Pi);
+        let installation = core.registry.update_lease(HarnessId::Pi).await;
         let service = core.rpc_service();
         let caller = tokio::spawn(async move {
             service
-                .handle(
-                    method,
-                    serde_json::json!({"harness":"codex", "chatId":CHAT}),
-                )
+                .handle(method, serde_json::json!({"harness":"pi", "chatId":CHAT}))
                 .await
         });
         assert!(
@@ -529,7 +480,7 @@ async fn project_catalog_rpcs_hold_update_leases_through_cancelled_discovery_cle
             "{method} bypassed installation"
         );
         drop(installation);
-        core.registry.end_update(HarnessId::Codex);
+        core.registry.end_update(HarnessId::Pi);
         let discovered_root = tokio::time::timeout(Duration::from_secs(2), starts.recv())
             .await
             .unwrap()
@@ -537,10 +488,10 @@ async fn project_catalog_rpcs_hold_update_leases_through_cancelled_discovery_cle
         assert_eq!(discovered_root, root, "{method} lost project context");
         caller.abort();
         assert!(matches!(caller.await, Err(error) if error.is_cancelled()));
-        core.registry.begin_update(HarnessId::Codex);
+        core.registry.begin_update(HarnessId::Pi);
         let registry = core.registry.clone();
         let mut next_installation =
-            tokio::spawn(async move { registry.update_lease(HarnessId::Codex).await });
+            tokio::spawn(async move { registry.update_lease(HarnessId::Pi).await });
         assert!(
             tokio::time::timeout(Duration::from_millis(30), &mut next_installation)
                 .await
@@ -554,7 +505,7 @@ async fn project_catalog_rpcs_hold_update_leases_through_cancelled_discovery_cle
                 .unwrap()
                 .unwrap(),
         );
-        core.registry.end_update(HarnessId::Codex);
+        core.registry.end_update(HarnessId::Pi);
         core.shutdown().await;
     }
 }

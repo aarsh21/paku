@@ -25,13 +25,14 @@ use crate::lock;
 /// Refresh this long before `exp` (legacy AppConfig: 60s early margin).
 pub const EARLY_REFRESH_SECS: i64 = 60;
 
-/// Production endpoints (edge/wrangler.jsonc). Mobile always talks to prod —
-/// a stale override once broke sign-in in the worst ghost way.
-pub const PRODUCTION_EDGE_URL: &str = "https://edge.zeron.sh";
-pub const WORKOS_CLIENT_ID: &str = "client_01KWD0EAKZKD50YCQJNYSRE4BY";
+/// No hosted service is assumed. Platforms may pass their configured edge
+/// URL explicitly or use this environment-based configuration.
+pub fn configured_edge_url() -> String {
+    std::env::var("PAKU_EDGE_URL").unwrap_or_default()
+}
 pub const WORKOS_API_BASE: &str = "https://api.workos.com";
-/// OAuth redirect: `zeron://callback?code=…&state=…`.
-pub const CALLBACK_SCHEME: &str = "zeron";
+/// OAuth redirect: `paku://callback?code=…&state=…`.
+pub const CALLBACK_SCHEME: &str = "paku";
 
 fn percent_encode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
@@ -72,15 +73,27 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// WorkOS AuthKit authorization-code URL (the ASWebAuthenticationSession
-/// start URL). `state` is the caller's CSRF nonce.
+/// WorkOS is opt-in. An empty URL means no client id has been configured.
+/// Platforms with their own settings should use the explicit-id variant.
 pub fn workos_authorize_url(state: &str) -> String {
-    format!(
+    let client_id = std::env::var("PAKU_WORKOS_CLIENT_ID").unwrap_or_default();
+    workos_authorize_url_with_client_id(state, &client_id).unwrap_or_default()
+}
+
+/// WorkOS AuthKit authorization URL; `state` is the caller's CSRF nonce.
+pub fn workos_authorize_url_with_client_id(state: &str, client_id: &str) -> Result<String> {
+    let client_id = client_id.trim();
+    if client_id.is_empty() {
+        return Err(ClientError::InvalidArgument(
+            "WorkOS client id is not configured".into(),
+        ));
+    }
+    Ok(format!(
         "{WORKOS_API_BASE}/user_management/authorize?response_type=code&client_id={}&redirect_uri={}&provider=authkit&state={}",
-        percent_encode(WORKOS_CLIENT_ID),
+        percent_encode(client_id),
         percent_encode(&format!("{CALLBACK_SCHEME}://callback")),
         percent_encode(state),
-    )
+    ))
 }
 
 /// The `code` + `state` of an OAuth callback URL, or the provider's error.
@@ -154,8 +167,16 @@ pub(crate) fn http() -> &'static reqwest::Client {
     })
 }
 
-fn endpoint(edge_url: &str, path: &str) -> String {
-    format!("{}/{path}", edge_url.trim_end_matches('/'))
+fn endpoint(edge_url: &str, path: &str) -> Result<String> {
+    let url = reqwest::Url::parse(edge_url).map_err(|_| {
+        ClientError::InvalidArgument("edge URL is not configured or invalid".into())
+    })?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(ClientError::InvalidArgument(
+            "edge URL must be an HTTP(S) URL".into(),
+        ));
+    }
+    Ok(format!("{}/{path}", edge_url.trim_end_matches('/')))
 }
 
 async fn check(response: reqwest::Response) -> Result<reqwest::Response> {
@@ -190,7 +211,7 @@ pub async fn exchange_code(edge_url: &str, code: &str) -> Result<AuthExchange> {
         access_token: String,
         refresh_token: String,
     }
-    let url = endpoint(edge_url, "auth/exchange");
+    let url = endpoint(edge_url, "auth/exchange")?;
     let code = code.trim().to_owned();
     crate::runtime::run(async move {
         let response = http()
@@ -217,7 +238,7 @@ pub async fn list_orgs(edge_url: &str, access_token: &str) -> Result<Vec<AuthOrg
     struct Reply {
         orgs: Vec<AuthOrg>,
     }
-    let url = endpoint(edge_url, "auth/orgs");
+    let url = endpoint(edge_url, "auth/orgs")?;
     let token = access_token.to_owned();
     crate::runtime::run(async move {
         let response = http()
@@ -239,7 +260,7 @@ pub async fn refresh(
     refresh_token: &str,
     organization_id: Option<&str>,
 ) -> Result<AuthTokens> {
-    let url = endpoint(edge_url, "auth/refresh");
+    let url = endpoint(edge_url, "auth/refresh")?;
     let mut body = serde_json::json!({ "refreshToken": refresh_token });
     if let Some(org) = organization_id {
         body["organizationId"] = serde_json::Value::String(org.to_owned());
@@ -452,24 +473,28 @@ mod tests {
 
     #[test]
     fn authorize_url_and_callback_round_trip() {
-        let url = workos_authorize_url("s t&1");
+        assert!(workos_authorize_url_with_client_id("state", "  ").is_err());
+        assert!(endpoint("", "auth/exchange").is_err());
+        assert!(endpoint("file:///tmp/auth", "auth/exchange").is_err());
+        let url = workos_authorize_url_with_client_id("s t&1", "test-client").unwrap();
+        assert!(url.contains("client_id=test-client"));
         assert!(
             url.starts_with("https://api.workos.com/user_management/authorize?response_type=code")
         );
-        assert!(url.contains("redirect_uri=zeron%3A%2F%2Fcallback"));
+        assert!(url.contains("redirect_uri=paku%3A%2F%2Fcallback"));
         assert!(url.contains("state=s%20t%261"));
         assert_eq!(
-            parse_auth_callback("zeron://callback?code=abc&state=s%20t%261"),
+            parse_auth_callback("paku://callback?code=abc&state=s%20t%261"),
             Some(AuthCallback::Code {
                 code: "abc".into(),
                 state: Some("s t&1".into())
             })
         );
         assert!(matches!(
-            parse_auth_callback("zeron://callback?error=access_denied"),
+            parse_auth_callback("paku://callback?error=access_denied"),
             Some(AuthCallback::Error { .. })
         ));
-        assert_eq!(parse_auth_callback("zeron://callback"), None);
+        assert_eq!(parse_auth_callback("paku://callback"), None);
     }
 
     /// A raw HTTP/1.1 responder: counts requests, answers each with `reply`.

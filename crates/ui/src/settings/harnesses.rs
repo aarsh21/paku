@@ -23,11 +23,11 @@ use gpui::{
     px,
 };
 
-use zeron_engine::registry::{HarnessDescriptor, descriptor_enabled};
+use paku_engine::registry::{HarnessDescriptor, descriptor_enabled};
 
-use zeron_proto::{HarnessId, HarnessUpdatePhase, HarnessUpdatePolicy, HarnessUpdateStatus};
+use paku_proto::{HarnessId, HarnessUpdatePhase, HarnessUpdatePolicy, HarnessUpdateStatus};
 
-use zeron_rpc::methods;
+use paku_rpc::methods;
 
 use crate::motion;
 use crate::pickers::visible_harnesses;
@@ -69,14 +69,6 @@ fn offers_install(harness: HarnessId, installed: bool, can_install: bool) -> boo
 }
 
 fn install_hint(harness: HarnessId, enabled: bool, can_install: bool) -> String {
-    if harness == HarnessId::Antigravity {
-        return if can_install {
-            "Install Antigravity to enable"
-        } else {
-            "Set ANTIGRAVITY_ACP_EXECUTABLE to enable Antigravity"
-        }
-        .into();
-    }
     let hint = if enabled {
         format!(
             "{} CLI not installed — turn it off or install it",
@@ -85,7 +77,7 @@ fn install_hint(harness: HarnessId, enabled: bool, can_install: bool) -> String 
     } else {
         format!("Install the {} CLI to enable", cli_name(harness))
     };
-    if !can_install && let Some(command) = zeron_harness::install::manual_command(harness) {
+    if !can_install && let Some(command) = paku_harness::install::manual_command(harness) {
         format!("{hint}. Install with `{command}`")
     } else {
         hint
@@ -103,15 +95,7 @@ fn install_params(harness: HarnessId, target: &Option<String>) -> serde_json::Va
 /// The CLI named in the not-installed hint.
 pub fn cli_name(harness: HarnessId) -> &'static str {
     match harness {
-        HarnessId::ClaudeCode => "claude",
-        HarnessId::Codex => "codex",
-        HarnessId::Cursor => "cursor-agent",
-        HarnessId::Devin => "devin",
-        HarnessId::Grok => "grok",
-        HarnessId::Hermes => "hermes",
         HarnessId::Pi => "pi",
-        HarnessId::Opencode => "opencode",
-        HarnessId::Antigravity => "Antigravity",
         HarnessId::Mock => "mock",
     }
 }
@@ -364,9 +348,9 @@ impl HarnessesPage {
             || {
                 engine
                     .engine_info()
-                    .supports(zeron_proto::capabilities::HARNESS_UPDATES_V1)
+                    .supports(paku_proto::capabilities::HARNESS_UPDATES_V1)
             },
-            |device| state.device_supports(device, zeron_proto::capabilities::HARNESS_UPDATES_V1),
+            |device| state.device_supports(device, paku_proto::capabilities::HARNESS_UPDATES_V1),
         )
     }
 
@@ -859,12 +843,6 @@ impl HarnessesPage {
                     meta.push(div().text_color(color).child(text).into_any_element());
                 }
                 match harness {
-                    HarnessId::Cursor => meta.push(
-                        div()
-                            .text_color(theme.text_muted.opacity(0.65))
-                            .child("Cursor SDK · Managed by Zeron")
-                            .into_any_element(),
-                    ),
                     HarnessId::Pi => meta.push(
                         div()
                             .text_color(theme.text_muted.opacity(0.65))
@@ -873,8 +851,7 @@ impl HarnessesPage {
                     ),
                     _ => {}
                 }
-                // widgets::row_tile with the brand tint honored (the Claude
-                // mark keeps its orange, like the picker rail).
+                // Match the picker rail's brand tile.
                 let tile = div()
                     .flex_none()
                     .size(px(36.0))
@@ -1252,11 +1229,11 @@ mod tests {
             let state = cx.new(|_| crate::state::AppState::new());
             super::HarnessesPage::new(state, cx)
         });
-        let descriptor = |id, name: &str| zeron_engine::registry::HarnessDescriptor {
+        let descriptor = |id, name: &str| paku_engine::registry::HarnessDescriptor {
             id,
             name: name.into(),
             supports_steering: false,
-            steering_mode: zeron_proto::SteeringMode::TurnBoundary,
+            steering_mode: paku_proto::SteeringMode::TurnBoundary,
             reasoning_levels: Vec::new(),
             installed: true,
             can_install: false,
@@ -1265,21 +1242,18 @@ mod tests {
         window
             .update(cx, |page, _, cx| {
                 page.harnesses = super::Loadable::Ready(vec![
-                    descriptor(zeron_proto::HarnessId::ClaudeCode, "Claude Code"),
-                    descriptor(zeron_proto::HarnessId::Codex, "Codex"),
+                    descriptor(paku_proto::HarnessId::Pi, "Pi"),
+                    descriptor(paku_proto::HarnessId::Mock, "Mock"),
                 ]);
-                page.toggle_agent_details(zeron_proto::HarnessId::ClaudeCode, cx);
-                assert_eq!(
-                    page.expanded_harness,
-                    Some(zeron_proto::HarnessId::ClaudeCode)
-                );
+                page.toggle_agent_details(paku_proto::HarnessId::Pi, cx);
+                assert_eq!(page.expanded_harness, Some(paku_proto::HarnessId::Pi));
                 assert_eq!(
                     page.accounts_page
                         .as_ref()
                         .unwrap()
                         .read(cx)
                         .embedded_harness(),
-                    Some(zeron_proto::HarnessId::ClaudeCode)
+                    Some(paku_proto::HarnessId::Pi)
                 );
             })
             .unwrap();
@@ -1287,35 +1261,25 @@ mod tests {
             .unwrap();
         window
             .update(cx, |page, _, cx| {
-                page.toggle_agent_details(zeron_proto::HarnessId::Codex, cx);
-                assert_eq!(page.expanded_harness, Some(zeron_proto::HarnessId::Codex));
-                assert_eq!(
-                    page.accounts_page
-                        .as_ref()
-                        .unwrap()
-                        .read(cx)
-                        .embedded_harness(),
-                    Some(zeron_proto::HarnessId::Codex)
-                );
+                // A second click collapses Pi without discarding its Accounts page.
+                page.toggle_agent_details(paku_proto::HarnessId::Pi, cx);
+                assert_eq!(page.expanded_harness, None);
+                assert!(page.accounts_page.is_some());
             })
             .unwrap();
         cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear())
             .unwrap();
-        // Antigravity signs in through the very same Accounts section.
         window
             .update(cx, |page, _, cx| {
-                page.harnesses = super::Loadable::Ready(vec![descriptor(
-                    zeron_proto::HarnessId::Antigravity,
-                    "Antigravity",
-                )]);
-                page.toggle_agent_details(zeron_proto::HarnessId::Antigravity, cx);
+                page.toggle_agent_details(paku_proto::HarnessId::Pi, cx);
+                assert_eq!(page.expanded_harness, Some(paku_proto::HarnessId::Pi));
                 assert_eq!(
                     page.accounts_page
                         .as_ref()
                         .unwrap()
                         .read(cx)
                         .embedded_harness(),
-                    Some(zeron_proto::HarnessId::Antigravity)
+                    Some(paku_proto::HarnessId::Pi)
                 );
             })
             .unwrap();
@@ -1327,18 +1291,7 @@ mod tests {
 #[cfg(test)]
 #[test]
 fn install_visibility_and_hint_follow_target_capabilities() {
-    for id in [
-        HarnessId::Antigravity,
-        HarnessId::Codex,
-        HarnessId::Opencode,
-        HarnessId::ClaudeCode,
-        HarnessId::Cursor,
-        HarnessId::Pi,
-        HarnessId::Grok,
-        HarnessId::Hermes,
-        HarnessId::Devin,
-        HarnessId::Mock,
-    ] {
+    for id in [HarnessId::Pi, HarnessId::Mock] {
         for installed in [false, true] {
             for available in [false, true] {
                 assert_eq!(
@@ -1348,20 +1301,16 @@ fn install_visibility_and_hint_follow_target_capabilities() {
             }
         }
     }
-    assert_eq!(cli_name(HarnessId::Antigravity), "Antigravity");
+    assert_eq!(cli_name(HarnessId::Pi), "pi");
     assert_eq!(
-        install_hint(HarnessId::Antigravity, false, true),
-        "Install Antigravity to enable"
-    );
-    assert!(
-        install_hint(HarnessId::Antigravity, false, false).contains("ANTIGRAVITY_ACP_EXECUTABLE")
+        install_hint(HarnessId::Pi, false, true),
+        "Install the pi CLI to enable"
     );
 }
 
 #[cfg(test)]
 #[test]
 fn install_phase_copy_and_cancel_target_match_install() {
-    assert_eq!(install_label("Claude Code"), "Installing Claude Code…");
     assert_eq!(install_label("Pi"), "Installing Pi…");
     for target in [None, Some("remote-device".to_string())] {
         let params = install_params(HarnessId::Pi, &target);
@@ -1372,11 +1321,11 @@ fn install_phase_copy_and_cancel_target_match_install() {
         );
     }
     assert_eq!(
-        install_hint(HarnessId::Codex, false, false),
-        "Install the codex CLI to enable. Install with `npm install -g @openai/codex`"
+        install_hint(HarnessId::Pi, false, false),
+        "Install the pi CLI to enable. Install with `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`"
     );
     assert!(
-        install_hint(HarnessId::Codex, true, false)
-            .starts_with("codex CLI not installed — turn it off or install it.")
+        install_hint(HarnessId::Pi, true, false)
+            .starts_with("pi CLI not installed — turn it off or install it.")
     );
 }

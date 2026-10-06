@@ -1,7 +1,7 @@
 use super::{Process, normalize::string};
 use crate::HarnessError;
+use paku_proto::{Model, ModelOption, ModelOptionChoice, ReasoningLevel, SlashCommand};
 use serde_json::{Value, json};
-use zeron_proto::{Model, ModelOption, ModelOptionChoice, ReasoningLevel, SlashCommand};
 
 pub(super) fn levels(data: &Value) -> Vec<ReasoningLevel> {
     data["levels"]

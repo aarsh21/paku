@@ -1,5 +1,5 @@
 [package]
-name = "zeron-mobile"
+name = "paku-mobile"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,7 @@ publish.workspace = true
 # link. Platform code paints, scrolls and handles gestures; everything that
 # decides *what* to paint and *where* lives here.
 [lib]
-name = "zeron_mobile"
+name = "paku_mobile"
 crate-type = ["lib", "staticlib", "cdylib"]
 
 [[bin]]
@@ -22,13 +22,13 @@ bindgen = ["uniffi/cli"]
 
 [dependencies]
 uniffi = "0.32"
-zeron-markdown.workspace = true
-zeron-text.workspace = true
-zeron-doc.workspace = true
-zeron-proto.workspace = true
-zeron-client.workspace = true
+paku-markdown.workspace = true
+paku-text.workspace = true
+paku-doc.workspace = true
+paku-proto.workspace = true
+paku-client.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 similar.workspace = true
-zeron-syntax.workspace = true
+paku-syntax.workspace = true
 thiserror.workspace = true

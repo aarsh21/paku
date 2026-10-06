@@ -1,12 +1,10 @@
 //! Opt-in real-model checks through the production queue and command executor.
-//! ZERON_TEST_HARNESS=claude ZERON_TEST_MODEL=claude-haiku-4-5 cargo test -p zeron-engine --test steering_live -- --ignored --nocapture
+//! PAKU_TEST_HARNESS=pi PAKU_TEST_MODEL=default cargo test -p paku-engine --test steering_live -- --ignored --nocapture
+use paku_doc::{MessageRole, SessionCommandPayload};
+use paku_engine::{EngineCore, HarnessRegistry};
+use paku_harness::{Harness, PiHarness};
+use paku_proto::{ChatConfig, RunRequest, SandboxLevel, SessionStatus};
 use std::{sync::Arc, time::Duration};
-use zeron_doc::{MessageRole, SessionCommandPayload};
-use zeron_engine::{EngineCore, HarnessRegistry};
-use zeron_harness::{
-    AcpHarness, ClaudeHarness, CodexHarness, CursorHarness, Harness, OpencodeHarness,
-};
-use zeron_proto::{ChatConfig, RunRequest, SandboxLevel, SessionStatus};
 
 async fn wait(core: &EngineCore, mut predicate: impl FnMut() -> bool, what: &str) {
     if tokio::time::timeout(Duration::from_secs(180), async {
@@ -32,24 +30,16 @@ async fn wait(core: &EngineCore, mut predicate: impl FnMut() -> bool, what: &str
 #[tokio::test]
 #[ignore = "uses real model quota; select harness and inexpensive model explicitly"]
 async fn rapid_steers_preserve_children_context_and_held_queue() {
-    let name = std::env::var("ZERON_TEST_HARNESS").expect("select harness");
-    let model = std::env::var("ZERON_TEST_MODEL").ok();
-    let burst: usize = std::env::var("ZERON_TEST_BURST")
+    let name = std::env::var("PAKU_TEST_HARNESS").expect("select harness");
+    let model = std::env::var("PAKU_TEST_MODEL").ok();
+    let burst: usize = std::env::var("PAKU_TEST_BURST")
         .ok()
         .map(|s| s.parse().unwrap())
         .unwrap_or(3);
     assert!(burst > 0);
     let harness: Arc<dyn Harness> = match name.as_str() {
-        "claude" => Arc::new(ClaudeHarness::new()),
-        "codex" => Arc::new(CodexHarness::new()),
-        "cursor" => Arc::new(CursorHarness::new()),
-        "opencode" => Arc::new(OpencodeHarness::new()),
-        "grok" => Arc::new(AcpHarness::grok()),
-        "devin" => Arc::new(AcpHarness::devin()),
-        "hermes" => Arc::new(AcpHarness::hermes()),
-        "pi" => Arc::new(zeron_harness::PiHarness::new()),
-        "antigravity" => Arc::new(AcpHarness::antigravity()),
-        _ => panic!("unknown harness"),
+        "pi" => Arc::new(PiHarness::new()),
+        _ => panic!("unsupported harness {name}; select pi"),
     };
     let dir = tempfile::tempdir().unwrap();
     let id = harness.id();
@@ -83,16 +73,7 @@ async fn rapid_steers_preserve_children_context_and_held_queue() {
         .unwrap();
     println!("{name}: workspace {}", dir.path().display());
     let secret = uuid::Uuid::new_v4().to_string();
-    // Codex cleans up background jobs on normal tool completion, including in
-    // a no-steering baseline. Check its child during the active tool; other
-    // providers additionally keep a background job alive across tool completion.
-    // Antigravity does the same: its shell reaps background jobs when the
-    // command finishes (verified with no steering at all, 2/2 runs).
-    let background_seconds = if matches!(name.as_str(), "codex" | "antigravity") {
-        4
-    } else {
-        20
-    };
+    let background_seconds = 20;
     core.doc_host.queue_command("audit", SessionCommandPayload::Run {
         message_id: "opening".into(),
         request: RunRequest { mcp: None, prompt: format!("This is an automated regression test of chat steering and message queues in a disposable temporary workspace. Remember test token {secret}. Execute exactly `sh -c 'sleep {background_seconds}; printf alive > background-survivor' >/dev/null 2>&1 & printf started > started; sleep 8; printf survived > survivor` in this directory, then reply DONE. All follow-ups are additive; never cancel earlier work. Execute each request once."), harness: Some(id), model, reasoning: None, model_options: Default::default(), cwd: dir.path().to_str().unwrap().into(), sandbox: SandboxLevel::DangerFullAccess, auto_approve: true, attachments: vec![], worktree: None, resume: None }
@@ -203,25 +184,6 @@ async fn rapid_steers_preserve_children_context_and_held_queue() {
             .count(),
         burst + 3
     );
-    if matches!(name.as_str(), "claude" | "cursor" | "codex") {
-        let events = core.sessions.subscribe("audit", 0).unwrap().0;
-        let completions = events
-            .iter()
-            .filter(|event| {
-                matches!(
-                    event.event,
-                    zeron_proto::AgentEvent::Done {
-                        status: zeron_proto::DoneStatus::Completed,
-                        ..
-                    }
-                )
-            })
-            .count();
-        assert_eq!(
-            completions, 3,
-            "native steering must affect the original turn; only the two explicitly queued messages start subsequent turns"
-        );
-    }
     core.shutdown().await;
     println!(
         "PASS {name}: child survived, {burst} rapid steers and two queued turns ran exactly once with original context"

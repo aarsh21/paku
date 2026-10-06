@@ -1,17 +1,15 @@
-//! Harness + model catalogs. The phone mirrors its run device's live catalog
-//! (`ListHarnesses` / `ListModels` over the relay) and falls back to these
-//! curated statics (ports of crates/harness's catalogs via the legacy
-//! `HarnessCatalog.swift`). Ids are wire strings (`claude-code`, `xhigh`) so a
-//! newer host's harness never fails to decode here.
+//! Harness + model catalogs. The phone mirrors its run device's live Pi
+//! catalog (`ListHarnesses` / `ListModels` over the relay), falling back to
+//! Pi's configured default when the execution device is unreachable.
 
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HarnessInfo {
-    /// Wire id (`claude-code`).
+    /// Wire id (`pi`; `mock` is reserved for tests).
+    #[serde(deserialize_with = "deserialize_harness_id")]
     pub id: String,
-    /// Display name.
     #[serde(alias = "name")]
     pub label: String,
     #[serde(default)]
@@ -21,12 +19,20 @@ pub struct HarnessInfo {
     pub steering_mode: Option<String>,
     #[serde(default)]
     pub reasoning_levels: Vec<String>,
-    /// CLI present on the listing device (absent on old engines ⇒ true).
     #[serde(default = "default_true")]
     pub installed: bool,
-    /// Offered by the listing device (Settings → Providers). `None` ⇒ legacy.
     #[serde(default)]
     pub enabled: Option<bool>,
+}
+
+fn deserialize_harness_id<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let id = String::deserialize(d)?;
+    match id.as_str() {
+        "pi" | "mock" => Ok(id),
+        _ => Err(serde::de::Error::custom(format!(
+            "unsupported harness: {id}"
+        ))),
+    }
 }
 
 fn default_true() -> bool {
@@ -51,9 +57,8 @@ impl HarnessInfo {
         Some(self.supports_steering? && self.steering_mode.as_deref()? == "step-boundary")
     }
 
-    /// Listed by the device and usable (installed, not disabled).
     pub fn offered(&self) -> bool {
-        self.installed && self.enabled != Some(false)
+        matches!(self.id.as_str(), "pi" | "mock") && self.installed && self.enabled != Some(false)
     }
 }
 
@@ -80,7 +85,7 @@ pub struct ModelInfo {
     pub label: String,
     #[serde(default)]
     pub description: Option<String>,
-    /// Lowercase wire values (`low`…`ultrathink`); empty = no effort ladder.
+    /// Pi's model-specific effort ladder; empty = no reasoning support.
     #[serde(default)]
     pub reasoning_levels: Vec<String>,
     #[serde(default)]
@@ -103,304 +108,36 @@ fn model(
     }
 }
 
-fn option(id: &str, label: &str, choices: &[(&str, &str)], default: &str) -> ModelOption {
-    ModelOption {
-        id: id.into(),
-        label: label.into(),
-        choices: choices
-            .iter()
-            .map(|(id, label)| ModelOptionChoice {
-                id: (*id).into(),
-                label: (*label).into(),
-            })
-            .collect(),
-        default_choice: default.into(),
-    }
-}
-
-fn toggle(id: &str, label: &str) -> ModelOption {
-    option(id, label, &[("off", "Off"), ("on", "On")], "off")
-}
-
-fn context_window(default: &str) -> ModelOption {
-    option(
-        "contextWindow",
-        "Context Window",
-        &[("200k", "200K"), ("1m", "1M")],
-        default,
-    )
-}
-
-const FULL_LADDER: &[&str] = &[
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-    "max",
-    "ultracode",
-    "ultrathink",
-];
-const CLAUDE_XHIGH: &[&str] = &["low", "medium", "high", "xhigh", "max", "ultrathink"];
-const CODEX_ULTRA: &[&str] = &["low", "medium", "high", "xhigh", "max", "ultra"];
-const CODEX_MAX: &[&str] = &["low", "medium", "high", "xhigh", "max"];
-const CODEX_XHIGH: &[&str] = &["low", "medium", "high", "xhigh"];
-
-/// Static fallback = the engine's `default_enabled()` pair. ACP agents
-/// appear only through a device's live catalog (opt-in per device).
+/// Pi is the only production harness. Mock is never shown in the picker.
 pub fn fallback_harnesses() -> Vec<HarnessInfo> {
-    vec![
-        HarnessInfo::fallback("claude-code", "Claude Code"),
-        HarnessInfo::fallback("codex", "Codex"),
-    ]
+    vec![HarnessInfo::fallback("pi", "Pi")]
 }
 
-/// Display name for any harness id the fleet can produce.
 pub fn harness_label(id: &str) -> String {
     match id {
-        "claude-code" => "Claude Code",
-        "codex" => "Codex",
-        "devin" => "Devin",
-        "grok" => "Grok",
-        "hermes" => "Hermes",
-        "pi" => "Pi",
-        "cursor" => "Cursor",
-        "opencode" => "OpenCode",
-        "antigravity" => "Antigravity",
-        "mock" => "Mock",
-        other => return other.to_owned(),
+        "pi" => "Pi".into(),
+        "mock" => "Mock".into(),
+        other => other.to_owned(),
     }
-    .to_owned()
 }
 
-/// Curated static models for a harness (first row = default).
+/// Real provider/model ids must come from Pi's live device-local catalog.
+/// In particular, an unsupported legacy harness never gets Pi's models.
 pub fn fallback_models(harness: &str) -> Vec<ModelInfo> {
-    let service_tier = || {
-        vec![option(
-            "serviceTier",
-            "Service Tier",
-            &[("default", "Standard"), ("fast", "Fast")],
-            "default",
-        )]
-    };
     match harness {
-        "grok" => vec![model(
-            "grok-4.5",
-            "Grok 4.5",
-            "xAI's coding model — 500k context",
-            &["low", "medium", "high"],
-            vec![],
-        )],
-        "devin" => vec![
-            model(
-                "swe-1-7-medium",
-                "SWE-1.7 Medium",
-                "Devin's default coding model",
-                &[],
-                vec![],
-            ),
-            model(
-                "claude-fable-5-1-high",
-                "Claude Fable 5.1 High",
-                "Anthropic's frontier model through Devin",
-                &[],
-                vec![],
-            ),
-            model(
-                "adaptive",
-                "Adaptive",
-                "Devin picks the model per request",
-                &[],
-                vec![],
-            ),
-        ],
-        "hermes" => vec![
-            model(
-                "hermes-4-405b",
-                "Hermes 4 405B",
-                "Nous Research's hybrid-reasoning flagship",
-                &[],
-                vec![],
-            ),
-            model(
-                "hermes-4-70b",
-                "Hermes 4 70B",
-                "Faster Hermes 4 — same post-training, 70B",
-                &[],
-                vec![],
-            ),
-        ],
-        "pi" => vec![model(
+        "pi" | "mock" => vec![model(
             "default",
-            "pi default",
-            "Runs the model configured in pi (`pi` settings)",
+            "Pi default",
+            "Runs the model configured in Pi settings",
             &["minimal", "low", "medium", "high", "xhigh", "max"],
             vec![],
         )],
-        "opencode" => vec![
-            model(
-                "opencode/big-pickle",
-                "Big Pickle",
-                "OpenCode Zen's flagship coding model",
-                &[],
-                vec![],
-            ),
-            model(
-                "opencode/mimo-v2.5-free",
-                "MiMo V2.5 Free",
-                "Free tier on OpenCode Zen",
-                &[],
-                vec![],
-            ),
-            model(
-                "opencode/hy3-free",
-                "Hy3 Free",
-                "Free tier on OpenCode Zen",
-                &["low", "medium", "high"],
-                vec![],
-            ),
-        ],
-        "antigravity" => vec![
-            model(
-                "gemini-3.7-flash",
-                "Gemini 3.7 Flash",
-                "Google's fast Gemini model through Antigravity",
-                &["low", "medium", "high"],
-                vec![],
-            ),
-            model(
-                "gemini-3.1-pro",
-                "Gemini 3.1 Pro",
-                "Google's most capable Gemini model through Antigravity",
-                &["low", "high"],
-                vec![],
-            ),
-        ],
-        "codex" => vec![
-            model(
-                "gpt-6-astra",
-                "GPT-6-Astra",
-                "Our most capable model for complex, demanding work.",
-                CODEX_ULTRA,
-                service_tier(),
-            ),
-            model(
-                "gpt-5.6-sol",
-                "GPT-5.6-Sol",
-                "Frontier reasoning flagship",
-                CODEX_ULTRA,
-                service_tier(),
-            ),
-            model(
-                "gpt-5.6-terra",
-                "GPT-5.6-Terra",
-                "Deep multi-step agentic work",
-                CODEX_ULTRA,
-                service_tier(),
-            ),
-            model(
-                "gpt-5.6-luna",
-                "GPT-5.6-Luna",
-                "Fast frontier model",
-                CODEX_MAX,
-                service_tier(),
-            ),
-            model(
-                "gpt-daybreak-blue-latest",
-                "Daybreak Blue",
-                "Frontier model for defensive cybersecurity work",
-                CODEX_ULTRA,
-                vec![],
-            ),
-            model(
-                "gpt-5.5",
-                "GPT-5.5",
-                "Previous generation flagship",
-                CODEX_XHIGH,
-                service_tier(),
-            ),
-            model(
-                "gpt-5.4",
-                "GPT-5.4",
-                "Reliable general coding",
-                CODEX_XHIGH,
-                service_tier(),
-            ),
-            model(
-                "gpt-5.4-mini",
-                "GPT-5.4-Mini",
-                "Small, fast and capable",
-                CODEX_XHIGH,
-                service_tier(),
-            ),
-            model(
-                "gpt-5.3-codex-spark",
-                "GPT-5.3-Codex-Spark",
-                "Ultra-fast lightweight coding",
-                CODEX_XHIGH,
-                service_tier(),
-            ),
-        ],
-        // claude-code (mock shares it)
-        _ => vec![
-            model(
-                "claude-fable-5-1",
-                "Fable 5.1",
-                "Most intelligent model for building agents",
-                FULL_LADDER,
-                vec![context_window("200k")],
-            ),
-            model(
-                "claude-fable-5",
-                "Fable 5",
-                "Previous generation Fable",
-                FULL_LADDER,
-                vec![context_window("200k")],
-            ),
-            model(
-                "claude-opus-5",
-                "Opus 5",
-                "Powerful model for complex work",
-                FULL_LADDER,
-                vec![context_window("200k"), toggle("fastMode", "Fast Mode")],
-            ),
-            model(
-                "claude-opus-4-8",
-                "Opus 4.8",
-                "Previous generation Opus",
-                FULL_LADDER,
-                vec![toggle("fastMode", "Fast Mode")],
-            ),
-            model(
-                "claude-opus-4-7",
-                "Opus 4.7",
-                "Older generation Opus",
-                CLAUDE_XHIGH,
-                vec![toggle("fastMode", "Fast Mode")],
-            ),
-            model(
-                "claude-sonnet-5",
-                "Sonnet 5",
-                "Balanced speed and intelligence",
-                CLAUDE_XHIGH,
-                vec![context_window("200k")],
-            ),
-            model(
-                "claude-haiku-4-5",
-                "Haiku 4.5",
-                "Fastest model for everyday tasks",
-                &[],
-                vec![toggle("thinking", "Thinking")],
-            ),
-        ],
+        _ => vec![],
     }
 }
 
-/// pickers.rs — High when available, then Medium, then the first level.
 pub fn default_reasoning(model: &ModelInfo) -> Option<String> {
     let levels = &model.reasoning_levels;
-    if levels.is_empty() {
-        return None;
-    }
     for preferred in ["high", "medium"] {
         if levels.iter().any(|l| l == preferred) {
             return Some(preferred.into());
@@ -411,15 +148,7 @@ pub fn default_reasoning(model: &ModelInfo) -> Option<String> {
 
 pub fn reasoning_label(level: &str) -> String {
     match level {
-        "minimal" => "Minimal".into(),
-        "low" => "Low".into(),
-        "medium" => "Medium".into(),
-        "high" => "High".into(),
         "xhigh" => "X-High".into(),
-        "max" => "Max".into(),
-        "ultra" => "Ultra".into(),
-        "ultracode" => "Ultracode".into(),
-        "ultrathink" => "Ultrathink".into(),
         other => {
             let mut chars = other.chars();
             chars
@@ -430,83 +159,29 @@ pub fn reasoning_label(level: &str) -> String {
     }
 }
 
-fn stripped_1m(id: &str) -> Option<&str> {
-    id.strip_suffix("[1m]").or_else(|| id.strip_suffix("-1m"))
-}
-
-fn norm(id: &str) -> String {
-    id.chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .collect::<String>()
-        .to_ascii_lowercase()
-}
-
-fn curated_catalog(harness: &str) -> Vec<ModelInfo> {
-    if harness == "claude-code" || harness == "mock" {
-        fallback_models(harness)
-    } else {
-        Vec::new()
-    }
-}
-
-fn curated_label(id: &str, catalog: &[ModelInfo]) -> Option<String> {
-    let id_norm = norm(id);
-    if let Some(exact) = catalog.iter().find(|m| norm(&m.id) == id_norm) {
-        return Some(exact.label.clone());
-    }
-    if id_norm.is_empty() || !id_norm.chars().all(|c| c.is_ascii_alphabetic()) {
-        return None;
-    }
-    catalog
-        .iter()
-        .find(|m| norm(&m.id).contains(&id_norm))
-        .map(|m| m.label.clone())
-}
-
-/// Clean a live `ListModels` reply: drop a `default` placeholder when real
-/// rows exist, fold `[1m]`/`-1m` variants into a Context Window option, and
-/// prefer curated labels (legacy `HarnessCatalog.normalize`).
+/// Remove a default placeholder only when the live catalog has real models.
+/// Preserve Pi's exact provider-qualified ids, labels and options; suffixes
+/// such as `[1m]` are model identity, not a client-created context option.
 pub fn normalize_models(harness: &str, models: Vec<ModelInfo>) -> Vec<ModelInfo> {
-    let catalog = curated_catalog(harness);
-    let ids: Vec<String> = models.iter().map(|m| m.id.clone()).collect();
-    let has_real = ids.iter().any(|id| !id.eq_ignore_ascii_case("default"));
+    if !matches!(harness, "pi" | "mock") {
+        return vec![];
+    }
+    let has_real = models.iter().any(|m| m.id != "default");
     models
         .into_iter()
-        .filter_map(|mut row| {
-            if has_real && row.id.eq_ignore_ascii_case("default") {
-                return None;
-            }
-            if let Some(base) = stripped_1m(&row.id).map(str::to_owned) {
-                if ids.contains(&base) {
-                    return None;
-                }
-                row.id = base;
-                if let Some(start) = row.label.rfind('(')
-                    && row.label.ends_with(')')
-                    && start > 0
-                {
-                    row.label = row.label[..start].trim().to_owned();
-                }
-                if !row.options.iter().any(|o| o.id == "contextWindow") {
-                    row.options.push(context_window("1m"));
-                }
-            }
-            if let Some(label) = curated_label(&row.id, &catalog) {
-                row.label = label;
-            }
-            Some(row)
-        })
+        .filter(|m| !has_real || m.id != "default")
         .collect()
 }
 
-/// Labels learned from hosts' live model catalogs, keyed by (harness, id):
-/// harnesses without a curated list (Codex, Cursor…) still get the host's
-/// human label instead of the raw model id.
+/// Display labels learned from live Pi catalogs.
 static LEARNED_LABELS: std::sync::LazyLock<
     std::sync::RwLock<std::collections::HashMap<(String, String), String>>,
 > = std::sync::LazyLock::new(Default::default);
 
 pub(crate) fn learn_labels(harness: &str, models: &[ModelInfo]) {
+    if !matches!(harness, "pi" | "mock") {
+        return;
+    }
     let Ok(mut map) = LEARNED_LABELS.write() else {
         return;
     };
@@ -517,33 +192,18 @@ pub(crate) fn learn_labels(harness: &str, models: &[ModelInfo]) {
     }
 }
 
-fn learned_label(harness: &str, model_id: &str) -> Option<String> {
-    let map = LEARNED_LABELS.read().ok()?;
-    map.get(&(harness.to_owned(), model_id.to_owned()))
-        .or_else(|| {
-            stripped_1m(model_id).and_then(|base| map.get(&(harness.to_owned(), base.to_owned())))
-        })
-        .cloned()
-}
-
-/// Human label for a chat's model id (chip / row subtitle).
 pub fn model_label(harness: &str, model_id: &str) -> String {
-    let catalog = fallback_models(harness);
-    if let Some(found) = catalog
-        .iter()
-        .find(|m| m.id == model_id)
-        .or_else(|| stripped_1m(model_id).and_then(|base| catalog.iter().find(|m| m.id == base)))
-    {
+    if let Some(found) = fallback_models(harness).iter().find(|m| m.id == model_id) {
         return found.label.clone();
     }
-    learned_label(harness, model_id)
-        .or_else(|| curated_label(model_id, &curated_catalog(harness)))
+    LEARNED_LABELS
+        .read()
+        .ok()
+        .and_then(|map| map.get(&(harness.to_owned(), model_id.to_owned())).cloned())
         .unwrap_or_else(|| model_id.to_owned())
 }
 
-/// Last-known live catalogs on disk (`{data_dir}/catalogs/{device}.json`):
-/// pickers open instantly with the device's real list, and an unreachable
-/// device still shows what it offered last time before the static fallback.
+/// Last-known live catalogs on disk (`{data_dir}/catalogs/{device}.json`).
 #[derive(Debug, Clone)]
 pub(crate) struct DiskCatalog {
     dir: std::path::PathBuf,
@@ -611,10 +271,12 @@ impl DiskCatalog {
     }
 
     pub(crate) fn models(&self, device_id: &str, harness: &str) -> Option<Vec<ModelInfo>> {
+        if !matches!(harness, "pi" | "mock") {
+            return None;
+        }
         self.load(device_id).models.remove(harness)
     }
 
-    /// Teach [`model_label`] every label cached on disk (client start).
     pub(crate) fn warm_labels(&self) {
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
             return;
@@ -633,6 +295,9 @@ impl DiskCatalog {
     }
 
     pub(crate) fn put_models(&self, device_id: &str, harness: &str, list: &[ModelInfo]) {
+        if !matches!(harness, "pi" | "mock") {
+            return;
+        }
         learn_labels(harness, list);
         let mut catalog = self.load(device_id);
         catalog.models.insert(harness.to_owned(), list.to_vec());
@@ -645,61 +310,80 @@ mod tests {
     use super::*;
 
     #[test]
-    fn labels_resolve_curated_and_unknown_models() {
-        assert_eq!(model_label("claude-code", "claude-opus-5"), "Opus 5");
-        assert_eq!(model_label("claude-code", "claude-opus-5[1m]"), "Opus 5");
-        assert_eq!(model_label("codex", "gpt-5.6-terra"), "GPT-5.6-Terra");
-        assert_eq!(model_label("codex", "some-new-model"), "some-new-model");
-        assert_eq!(harness_label("opencode"), "OpenCode");
+    fn only_pi_is_offered_as_a_production_fallback() {
+        assert_eq!(
+            fallback_harnesses()
+                .iter()
+                .map(|h| h.id.as_str())
+                .collect::<Vec<_>>(),
+            ["pi"]
+        );
+        assert_eq!(harness_label("pi"), "Pi");
+        assert_eq!(model_label("pi", "default"), "Pi default");
+        assert_eq!(model_label("pi", "some-new-model"), "some-new-model");
     }
 
     #[test]
-    fn live_catalog_labels_replace_raw_ids() {
-        assert_eq!(
-            model_label("cursor-test", "sonnet-9-thinking"),
-            "sonnet-9-thinking"
-        );
-        learn_labels(
-            "cursor-test",
-            &[model(
-                "sonnet-9-thinking",
-                "Sonnet 9 Thinking",
-                "x",
-                &[],
-                vec![],
-            )],
-        );
-        assert_eq!(
-            model_label("cursor-test", "sonnet-9-thinking"),
-            "Sonnet 9 Thinking"
-        );
+    fn unsupported_harnesses_are_not_decoded_or_given_models() {
+        for id in [
+            "claude-code",
+            "codex",
+            "cursor",
+            "opencode",
+            "devin",
+            "grok",
+            "hermes",
+            "antigravity",
+            "future-harness",
+        ] {
+            assert!(
+                serde_json::from_value::<HarnessInfo>(serde_json::json!({"id":id,"name":id}))
+                    .is_err(),
+                "{id}"
+            );
+            assert!(fallback_models(id).is_empty(), "{id}");
+            assert!(
+                normalize_models(id, fallback_models("pi")).is_empty(),
+                "{id}"
+            );
+        }
     }
 
     #[test]
-    fn normalize_folds_1m_variants() {
+    fn live_provider_catalogs_keep_exact_identity_and_options() {
         let live = vec![
-            model("claude-opus-5[1m]", "Opus 5 (1M)", "x", &[], vec![]),
-            model("default", "Default", "x", &[], vec![]),
+            model(
+                "anthropic/claude-opus-5[1m]",
+                "Opus 5 (1M)",
+                "Anthropic",
+                &["high"],
+                vec![],
+            ),
+            model("openai/gpt-5.4", "GPT-5.4", "OpenAI", &[], vec![]),
         ];
-        let out = normalize_models("claude-code", live);
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].id, "claude-opus-5");
-        assert_eq!(out[0].label, "Opus 5");
-        assert!(out[0].options.iter().any(|o| o.id == "contextWindow"));
+        let mut with_default = live.clone();
+        with_default.push(fallback_models("pi").remove(0));
+        assert_eq!(normalize_models("pi", with_default), live);
+        learn_labels("pi", &live);
+        assert_eq!(
+            model_label("pi", "anthropic/claude-opus-5[1m]"),
+            "Opus 5 (1M)"
+        );
     }
 
     #[test]
-    fn disk_catalog_round_trips() {
+    fn disk_catalog_round_trips_per_device_pi_models() {
         let dir = tempfile::tempdir().unwrap();
         let cache = DiskCatalog::new(dir.path());
         assert!(cache.harnesses("dev/mac").is_none());
         cache.put_harnesses("dev/mac", &fallback_harnesses());
-        cache.put_models("dev/mac", "codex", &fallback_models("codex"));
-        assert_eq!(cache.harnesses("dev/mac").unwrap().len(), 2);
-        assert_eq!(
-            cache.models("dev/mac", "codex").unwrap()[0].id,
-            "gpt-6-astra"
-        );
-        assert!(cache.models("dev/mac", "grok").is_none());
+        let local = vec![model("anthropic/opus", "Opus", "Anthropic", &[], vec![])];
+        let remote = vec![model("openai/gpt-5.4", "GPT-5.4", "OpenAI", &[], vec![])];
+        cache.put_models("dev/mac", "pi", &local);
+        cache.put_models("dev/worker", "pi", &remote);
+        assert_eq!(cache.harnesses("dev/mac").unwrap().len(), 1);
+        assert_eq!(cache.models("dev/mac", "pi").unwrap(), local);
+        assert_eq!(cache.models("dev/worker", "pi").unwrap(), remote);
+        assert!(cache.models("dev/mac", "codex").is_none());
     }
 }

@@ -1,12 +1,12 @@
 //! Exercise the actual manual/setup runner with commands at the supported limit.
 #![cfg(unix)]
 
-use std::time::Duration;
-use zeron_engine::project_actions::{
+use paku_engine::project_actions::{
     MAX_PROJECT_ACTION_COMMAND_BYTES, launch_project_action, launch_project_setup_action,
 };
-use zeron_engine::{ProjectActionsStore, Terminals};
-use zeron_proto::{ProjectActionDraft, ProjectActionIcon};
+use paku_engine::{ProjectActionsStore, Terminals};
+use paku_proto::{ProjectActionDraft, ProjectActionIcon};
+use std::time::Duration;
 
 #[tokio::test]
 async fn manual_and_setup_actions_preserve_long_multiline_commands() {
@@ -17,7 +17,7 @@ async fn manual_and_setup_actions_preserve_long_multiline_commands() {
     let terminals = Terminals::new();
     for setup in [false, true] {
         let prefix = "printf '%s' '";
-        let suffix = "' > payload\nprintf '%s' \"$ZERON_PROJECT_ROOT\" > project-root\nprintf '%s' \"$ZERON_WORKTREE_PATH\" > worktree-path\nprintf '%s' 'quotes: \" $() ` ; é' > literal\n";
+        let suffix = "' > payload\nprintf '%s' \"$PAKU_PROJECT_ROOT\" > project-root\nprintf '%s' \"$PAKU_WORKTREE_PATH\" > worktree-path\nprintf '%s' 'quotes: \" $() ` ; é' > literal\n";
         let payload =
             "a".repeat(MAX_PROJECT_ACTION_COMMAND_BYTES - prefix.len() - suffix.trim_end().len());
         let command = format!("{prefix}{payload}{suffix}");

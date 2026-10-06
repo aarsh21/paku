@@ -74,13 +74,13 @@ emits its Vitest shutdown-state diagnostic; the focused checkpoint run is clean.
 ## Reproduction
 
 ```sh
-cargo test -p zeron-sync -p zeron-rpc --features zeron-sync/mock-server
-cargo test -p zeron-engine --lib --test session_publication --test restart_resume --test local_profiles --test codex_subagents
-cargo test -p zeron-update
-cargo test -p zeron-ui --lib -- --test-threads=1
+cargo test -p paku-sync -p paku-rpc --features paku-sync/mock-server
+cargo test -p paku-engine --lib --test session_publication --test restart_resume --test local_profiles --test codex_subagents
+cargo test -p paku-update
+cargo test -p paku-ui --lib -- --test-threads=1
 npm --prefix edge run typecheck
 npm --prefix edge test
-ZERON_WHALE_SNAPSHOT=/path/to/private-copy.bin cargo test -p zeron-engine --lib real_whale_replay_keeps_146_heartbeats_running_on_two_workers -- --ignored --nocapture
+PAKU_WHALE_SNAPSHOT=/path/to/private-copy.bin cargo test -p paku-engine --lib real_whale_replay_keeps_146_heartbeats_running_on_two_workers -- --ignored --nocapture
 ```
 
 ## Rollout

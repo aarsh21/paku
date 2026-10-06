@@ -1,13 +1,13 @@
-//! FFI records/enums mirroring `zeron-client`'s view models, plus the
+//! FFI records/enums mirroring `paku-client`'s view models, plus the
 //! conversions both ways. Plain data: Swift/Kotlin get value types.
 //!
-//! Wire-string ids (harness `claude-code`, effort `xhigh`) stay strings so a
-//! newer host's values never fail to cross the boundary.
+//! Wire-string ids (harness `pi`, effort `xhigh`) stay strings at the FFI
+//! boundary. Run configurations are validated against the protocol enums.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use zeron_client as zc;
+use paku_client as zc;
 
 // ── errors ────────────────────────────────────────────────────────────────
 
@@ -66,7 +66,7 @@ pub type CoreResult<T> = Result<T, CoreError>;
 /// Static per-install configuration.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct CoreConfig {
-    /// Edge base URL (`auth_production_edge_url()` for prod).
+    /// Explicit deployment edge base URL; no hosted service is assumed.
     pub edge_url: String,
     /// Writable directory for registry/doc snapshots and caches, scoped by
     /// the platform to the signed-in identity (sign-out wipes it).
@@ -478,7 +478,7 @@ pub struct SessionRow {
     pub device_id: String,
     pub device_name: Option<String>,
     pub device_online: bool,
-    /// Wire harness id (`claude-code`).
+    /// Wire harness id (`pi`, or test-only `mock`).
     pub harness: Option<String>,
     pub harness_label: Option<String>,
     pub model: Option<String>,
@@ -764,12 +764,12 @@ pub enum SandboxLevel {
 /// A chat's run configuration. Ids are wire strings.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct ChatConfig {
-    /// `claude-code`, `codex`, …
+    /// `pi` (default) or `mock` (explicit tests).
     pub harness: String,
     pub model: Option<String>,
-    /// `low` … `ultrathink`.
+    /// Pi's model-specific reasoning level (for example `low` or `xhigh`).
     pub reasoning: Option<String>,
-    /// Model option id → choice id (`contextWindow` → `1m`).
+    /// Model-specific option id → choice id, supplied by Pi's catalog.
     pub model_options: HashMap<String, String>,
     pub sandbox: SandboxLevel,
 }
@@ -804,9 +804,9 @@ impl From<&zc::ChatConfig> for ChatConfig {
                 })
                 .collect(),
             sandbox: match c.sandbox {
-                zeron_proto::SandboxLevel::ReadOnly => SandboxLevel::ReadOnly,
-                zeron_proto::SandboxLevel::WorkspaceWrite => SandboxLevel::WorkspaceWrite,
-                zeron_proto::SandboxLevel::DangerFullAccess => SandboxLevel::DangerFullAccess,
+                paku_proto::SandboxLevel::ReadOnly => SandboxLevel::ReadOnly,
+                paku_proto::SandboxLevel::WorkspaceWrite => SandboxLevel::WorkspaceWrite,
+                paku_proto::SandboxLevel::DangerFullAccess => SandboxLevel::DangerFullAccess,
             },
         }
     }
@@ -830,9 +830,9 @@ impl TryFrom<ChatConfig> for zc::ChatConfig {
                 .map(|(k, v)| (k, serde_json::Value::String(v)))
                 .collect(),
             sandbox: match c.sandbox {
-                SandboxLevel::ReadOnly => zeron_proto::SandboxLevel::ReadOnly,
-                SandboxLevel::WorkspaceWrite => zeron_proto::SandboxLevel::WorkspaceWrite,
-                SandboxLevel::DangerFullAccess => zeron_proto::SandboxLevel::DangerFullAccess,
+                SandboxLevel::ReadOnly => paku_proto::SandboxLevel::ReadOnly,
+                SandboxLevel::WorkspaceWrite => paku_proto::SandboxLevel::WorkspaceWrite,
+                SandboxLevel::DangerFullAccess => paku_proto::SandboxLevel::DangerFullAccess,
             },
         })
     }
@@ -1077,10 +1077,10 @@ pub struct FileMatch {
     pub is_dir: bool,
 }
 
-/// The canonical mention link the host understands (`[name](zeron-file:path)`).
+/// The canonical mention link the host understands (`[name](paku-file:path)`).
 #[uniffi::export]
 pub fn file_mention_link(path: String, is_dir: bool) -> String {
-    zeron_proto::file_mentions::local_file_link(&path, is_dir)
+    paku_proto::file_mentions::local_file_link(&path, is_dir)
 }
 
 /// Which session notifications this device wants.

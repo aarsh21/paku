@@ -1,15 +1,15 @@
 //! Isolated MCP stdio instance for manual discovery/create/converse smoke tests.
-//! Run with `cargo run -p zeron-engine --example mcp_standalone_smoke`.
+//! Run with `cargo run -p paku-engine --example mcp_standalone_smoke`.
 //! Uses a temporary profile and scripted harness, never the user's workspace.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use zeron_engine::{EngineCore, HarnessRegistry};
-use zeron_harness::{Harness, HarnessError, RunControls, mock::MockHarness};
-use zeron_mcp::{Origin, Tools, Zeron};
-use zeron_proto::{
+use paku_engine::{EngineCore, HarnessRegistry};
+use paku_harness::{Harness, HarnessError, RunControls, mock::MockHarness};
+use paku_mcp::{Origin, Paku, Tools};
+use paku_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SteeringMode,
 };
 
@@ -19,7 +19,7 @@ async fn main() -> anyhow::Result<()> {
     std::fs::write(dir.path().join("device-id"), "smoke-device")?;
     let registry = HarnessRegistry::new();
     registry.register(Arc::new(SmokeHarness));
-    let core = EngineCore::assemble(dir.path(), Arc::new(registry), HarnessId::Codex, None)?;
+    let core = EngineCore::assemble(dir.path(), Arc::new(registry), HarnessId::Pi, None)?;
     core.workspace.create_space(
         "smoke-project",
         "smoke-device",
@@ -30,28 +30,28 @@ async fn main() -> anyhow::Result<()> {
     core.workspace
         .create_chat("smoke-origin", Some("smoke-project"), None, None, None)?;
     core.workspace.rename_chat("smoke-origin", "Coordinator")?;
-    let tools = Tools::new(Arc::new(Zeron::with_client(
-        zeron_rpc::memory_client(core.rpc_service()),
+    let tools = Tools::new(Arc::new(Paku::with_client(
+        paku_rpc::memory_client(core.rpc_service()),
         Origin {
             chat_id: Some("smoke-origin".into()),
             device_id: Some("smoke-device".into()),
         },
     )));
-    zeron_mcp::serve_stdio(Arc::new(tools)).await?;
+    paku_mcp::serve_stdio(Arc::new(tools)).await?;
     core.shutdown().await;
     Ok(())
 }
 
-/// A scripted, installed Codex adapter: the production catalog excludes Mock.
+/// A scripted Pi identity: the production catalog excludes Mock.
 struct SmokeHarness;
 
 #[async_trait]
 impl Harness for SmokeHarness {
     fn id(&self) -> HarnessId {
-        HarnessId::Codex
+        HarnessId::Pi
     }
     fn display_name(&self) -> &str {
-        "Scripted Codex (smoke only)"
+        "Scripted Pi (smoke only)"
     }
     fn supports_steering(&self) -> bool {
         false
@@ -80,7 +80,7 @@ impl Harness for SmokeHarness {
         let mock = MockHarness {
             script: vec![
                 AgentEvent::SessionStarted {
-                    harness: HarnessId::Codex,
+                    harness: HarnessId::Pi,
                     model: "smoke-1".into(),
                     tools: vec![],
                     cwd: request.cwd.clone(),

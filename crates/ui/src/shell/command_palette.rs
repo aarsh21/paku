@@ -42,6 +42,7 @@ enum Entry {
     NewProject,
     Settings,
     Theme(AppearanceMode),
+    InterfaceScale(crate::ui_scale::Change),
     Chat(String),
 }
 
@@ -58,6 +59,14 @@ impl Entry {
                     AppearanceMode::Dark => "Switch to dark theme",
                 },
                 mode.icon(),
+            )),
+            Self::InterfaceScale(change) => Some((
+                match change {
+                    crate::ui_scale::Change::Increase => "Increase interface scale",
+                    crate::ui_scale::Change::Decrease => "Decrease interface scale",
+                    crate::ui_scale::Change::Reset => "Reset interface scale to 100%",
+                },
+                icons::TUNING,
             )),
             Self::Chat(_) => None,
         }
@@ -79,6 +88,9 @@ fn actions_for(query: &str, is_dark: bool) -> Vec<Entry> {
         } else {
             AppearanceMode::Dark
         }),
+        Entry::InterfaceScale(crate::ui_scale::Change::Increase),
+        Entry::InterfaceScale(crate::ui_scale::Change::Decrease),
+        Entry::InterfaceScale(crate::ui_scale::Change::Reset),
     ]
     .into_iter()
     .filter(|entry| matches_query(query, entry.action().unwrap().0))
@@ -209,6 +221,9 @@ impl Shell {
             Entry::NewProject => self.open_add_space(cx),
             Entry::Settings => self.open_last_settings(cx),
             Entry::Theme(_) => unreachable!(),
+            Entry::InterfaceScale(change) => {
+                crate::ui_scale::change(change, window, cx);
+            }
             Entry::Chat(id) => self.open_chat(id, cx),
         }
     }
@@ -262,6 +277,15 @@ impl Shell {
                         } else {
                             id.default_combo()
                         }))
+                    }
+                    Entry::InterfaceScale(change) => {
+                        let id = match change {
+                            crate::ui_scale::Change::Increase => ShortcutId::IncreaseInterfaceScale,
+                            crate::ui_scale::Change::Decrease => ShortcutId::DecreaseInterfaceScale,
+                            crate::ui_scale::Change::Reset => ShortcutId::ResetInterfaceScale,
+                        };
+                        let combo = self.settings.keymap.get(id);
+                        (!combo.is_empty()).then(|| crate::settings::badge_combo(combo))
                     }
                     Entry::Settings => Some(crate::settings::badge_combo("mod-,")),
                     _ => None,
@@ -588,7 +612,7 @@ mod tests {
                     edge_token: None,
                     org_id: None,
                     workos_client_id: None,
-                    default_harness: zeron_proto::HarnessId::Mock,
+                    default_harness: paku_proto::HarnessId::Mock,
                 },
                 cx,
             )
@@ -596,7 +620,7 @@ mod tests {
         (window, dir)
     }
 
-    fn chat(id: &str, parent: Option<&str>, archived: bool, age: i64) -> zeron_proto::Chat {
+    fn chat(id: &str, parent: Option<&str>, archived: bool, age: i64) -> paku_proto::Chat {
         serde_json::from_value(serde_json::json!({
             "id": id, "title": id, "deviceId": "local", "archived": archived,
             "parentChatId": parent,
@@ -726,7 +750,10 @@ mod tests {
                 Entry::NewChat,
                 Entry::NewProject,
                 Entry::Settings,
-                Entry::Theme(AppearanceMode::Light)
+                Entry::Theme(AppearanceMode::Light),
+                Entry::InterfaceScale(crate::ui_scale::Change::Increase),
+                Entry::InterfaceScale(crate::ui_scale::Change::Decrease),
+                Entry::InterfaceScale(crate::ui_scale::Change::Reset),
             ]
         );
         assert_eq!(
@@ -737,6 +764,18 @@ mod tests {
         assert_eq!(
             actions_for("theme", true),
             vec![Entry::Theme(AppearanceMode::Light)]
+        );
+        assert_eq!(
+            actions_for("interface scale", true),
+            vec![
+                Entry::InterfaceScale(crate::ui_scale::Change::Increase),
+                Entry::InterfaceScale(crate::ui_scale::Change::Decrease),
+                Entry::InterfaceScale(crate::ui_scale::Change::Reset),
+            ]
+        );
+        assert_eq!(
+            actions_for("reset scale", true),
+            vec![Entry::InterfaceScale(crate::ui_scale::Change::Reset)]
         );
         assert!(actions_for("deployment", true).is_empty());
     }
@@ -765,9 +804,9 @@ mod tests {
     fn search_matches_words_across_chat_metadata() {
         assert!(matches_query(
             "mac auth",
-            "Fix authentication Zeron @ MacBook main"
+            "Fix authentication Paku @ MacBook main"
         ));
         assert!(matches_query("  ", "Any chat"));
-        assert!(!matches_query("mac windows", "Zeron @ MacBook"));
+        assert!(!matches_query("mac windows", "Paku @ MacBook"));
     }
 }

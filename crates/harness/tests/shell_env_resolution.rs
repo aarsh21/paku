@@ -9,7 +9,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use zeron_harness::{AcpHarness, Harness as _};
+use paku_harness::{Harness as _, PiHarness};
 
 fn write_executable(path: &Path, body: &str) {
     std::fs::write(path, body).unwrap();
@@ -21,11 +21,8 @@ async fn cli_on_login_shell_path_only_is_resolved() {
     let dir = tempfile::tempdir().unwrap();
     let shell_bin = dir.path().join("shell-bin");
     std::fs::create_dir(&shell_bin).unwrap();
-    write_executable(&shell_bin.join("devin"), "#!/bin/sh\nexit 0\n");
-    write_executable(&shell_bin.join("hermes"), "#!/bin/sh\nexit 0\n");
     // Native discovery prefers the newest installed version; outrank any real CLI.
     write_executable(&shell_bin.join("pi"), "#!/bin/sh\necho 9999.0.0\n");
-    write_executable(&shell_bin.join("claude"), "#!/bin/sh\nexit 0\n");
 
     // A $SHELL whose init shapes PATH — the shape resolution must survive.
     let fake_shell = dir.path().join("fake-shell");
@@ -48,37 +45,20 @@ async fn cli_on_login_shell_path_only_is_resolved() {
         std::env::set_var("SHELL", &fake_shell);
         std::env::set_var("HOME", dir.path());
         std::env::set_var("PATH", "/usr/bin:/bin");
-        std::env::remove_var("DEVIN_EXECUTABLE");
-        std::env::remove_var("HERMES_EXECUTABLE");
         std::env::remove_var("PI_EXECUTABLE");
-        std::env::remove_var("CLAUDE_CODE_EXECUTABLE");
-        std::env::remove_var("ZERON_NO_LOGIN_SHELL");
+        std::env::remove_var("PAKU_NO_LOGIN_SHELL");
     }
 
-    let snapshot = zeron_harness::shell_env::login_shell_path().expect("snapshot captured");
+    let snapshot = paku_harness::shell_env::login_shell_path().expect("snapshot captured");
     let snapshot = snapshot.to_string_lossy();
     assert!(
         snapshot.starts_with(&format!("{}:", shell_bin.display())),
         "snapshot should carry the shell-shaped PATH, got: {snapshot}"
     );
 
-    // The agent binaries are only reachable through the snapshot; the
-    // launch program (not the npx fallback) must be the shell-PATH binary,
-    // proving resolution consulted the login-shell snapshot.
-    // Native drivers consult the same snapshot for the agent CLI itself.
-    assert!(
-        zeron_harness::ClaudeHarness::new().installed(),
-        "claude resolves via login-shell PATH"
-    );
-    let devin = AcpHarness::devin()
-        .launch_program()
-        .expect("devin resolves via login-shell PATH");
-    assert_eq!(devin, shell_bin.join("devin"), "{devin:?}");
-    let hermes = AcpHarness::hermes()
-        .launch_program()
-        .expect("hermes resolves via login-shell PATH");
-    assert_eq!(hermes, shell_bin.join("hermes"), "{hermes:?}");
-    let pi = zeron_harness::PiHarness::new()
+    // Pi itself must resolve via the snapshot, never an adapter fallback.
+    assert!(PiHarness::new().installed());
+    let pi = PiHarness::new()
         .resolve_executable()
         .expect("pi resolves via login-shell PATH");
     assert_eq!(pi, shell_bin.join("pi"), "{pi:?}");

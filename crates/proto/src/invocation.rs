@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 
-pub const INVOCATION_SCHEME: &str = "zeron-invoke:";
+pub const INVOCATION_SCHEME: &str = "paku-invoke:";
 
 fn escape_label(label: &str) -> String {
     label
@@ -15,7 +15,7 @@ fn escape_label(label: &str) -> String {
 
 /// Native catalog entries may have no local skill file (for example plugin-provided commands).
 pub fn native_skill_identity(path: &str) -> bool {
-    path.starts_with("opencode-skill:") || path.starts_with("harness-skill:")
+    path.starts_with("harness-skill:pi:")
 }
 
 /// Catalog names must survive canonical link decoding without changing identity.
@@ -204,15 +204,11 @@ pub fn validate_harness_invocations(text: &str, harness: crate::HarnessId) -> Re
     Ok(())
 }
 
-/// Keep selected skill identity intact until Codex builds native input blocks.
-/// Other providers receive readable Markdown and their advertised command text.
+/// Pi receives readable Markdown file references and its advertised commands.
 pub fn harness_prompt(text: &str, harness: crate::HarnessId) -> String {
     let text = crate::file_mentions::file_mention_prompt(
         &crate::attachment_mentions::attachment_mention_prompt(text),
     );
-    if harness == crate::HarnessId::Codex {
-        return text;
-    }
     let mut result = String::new();
     let mut at = 0;
     for (range, invocation) in invocation_links(&text) {
@@ -293,17 +289,7 @@ mod tests {
         }
     }
 
-    const HARNESSES: [crate::HarnessId; 9] = [
-        crate::HarnessId::ClaudeCode,
-        crate::HarnessId::Codex,
-        crate::HarnessId::Cursor,
-        crate::HarnessId::Devin,
-        crate::HarnessId::Grok,
-        crate::HarnessId::Hermes,
-        crate::HarnessId::Pi,
-        crate::HarnessId::Antigravity,
-        crate::HarnessId::Opencode,
-    ];
+    const HARNESSES: [crate::HarnessId; 2] = [crate::HarnessId::Pi, crate::HarnessId::Mock];
 
     #[test]
     fn image_chips_reach_every_provider_as_their_plain_label() {
@@ -399,8 +385,8 @@ mod tests {
         }
     }
     #[test]
-    fn selected_native_skills_route_by_provider_and_keep_arguments() {
-        for harness in [crate::HarnessId::ClaudeCode, crate::HarnessId::Opencode] {
+    fn selected_native_skills_route_to_pi_and_keep_arguments() {
+        for harness in [crate::HarnessId::Pi] {
             let skill = Invocation::Skill {
                 name: "plugin:review".into(),
                 path: "/repo/SKILL.md".into(),
@@ -414,20 +400,14 @@ mod tests {
                 harness_prompt(&raw, harness),
                 "/plugin:review inspect tests"
             );
-            assert!(harness_prompt(&raw, crate::HarnessId::Cursor).starts_with("Use the skill "));
+            assert!(harness_prompt(&raw, crate::HarnessId::Mock).starts_with("Use the skill "));
             assert!(
                 harness_prompt(&format!("Please {}", skill.link()), harness)
                     .contains("Use the skill ")
             );
             assert_eq!(invocation_links(&raw)[0].1, skill);
         }
-        for harness in [
-            crate::HarnessId::Cursor,
-            crate::HarnessId::Devin,
-            crate::HarnessId::Grok,
-            crate::HarnessId::Hermes,
-            crate::HarnessId::Pi,
-        ] {
+        for harness in HARNESSES {
             let skill = skill("review", "/repo/SKILL.md");
             assert_eq!(
                 harness_prompt(&skill.link(), harness),
@@ -440,16 +420,16 @@ mod tests {
     fn native_only_skill_commands_cannot_cross_harnesses() {
         let skill = Invocation::Skill {
             name: "plugin:review".into(),
-            path: "opencode-skill:plugin:review".into(),
+            path: "harness-skill:pi:plugin:review".into(),
             command: Some(SkillCommand {
                 name: "plugin:review".into(),
-                harness: crate::HarnessId::Opencode,
+                harness: crate::HarnessId::Pi,
             }),
         };
         let raw = format!("{} inspect tests", skill.link());
         for harness in HARNESSES {
             let result = validate_harness_invocations(&raw, harness);
-            if harness == crate::HarnessId::Opencode {
+            if harness == crate::HarnessId::Pi {
                 assert!(result.is_ok(), "{harness:?}: {result:?}");
             } else {
                 let error = result.expect_err("foreign native skill must be rejected");
@@ -465,17 +445,15 @@ mod tests {
             path: "/repo/with space/SKILL.md".into(),
             command: Some(SkillCommand {
                 name: "plugin:review".into(),
-                harness: crate::HarnessId::Opencode,
+                harness: crate::HarnessId::Pi,
             }),
         };
         let raw = format!("{} inspect tests", skill.link());
         for harness in HARNESSES {
             validate_harness_invocations(&raw, harness).unwrap();
             let delivered = harness_prompt(&raw, harness);
-            if harness == crate::HarnessId::Opencode {
+            if harness == crate::HarnessId::Pi {
                 assert_eq!(delivered, "/plugin:review inspect tests");
-            } else if harness == crate::HarnessId::Codex {
-                assert_eq!(invocation_links(&delivered)[0].1, skill);
             } else {
                 assert_eq!(
                     delivered, "Use the skill [$review](/repo/with%20space/SKILL.md) inspect tests",
@@ -487,10 +465,7 @@ mod tests {
 
     #[test]
     fn native_skill_prefixes_follow_the_same_whitespace_rules_as_commands() {
-        for harness in HARNESSES
-            .into_iter()
-            .filter(|harness| *harness != crate::HarnessId::Codex)
-        {
+        for harness in HARNESSES {
             let skill = Invocation::Skill {
                 name: "review".into(),
                 path: "/repo/SKILL.md".into(),
@@ -520,17 +495,14 @@ mod tests {
     }
 
     #[test]
-    fn delivery_preserves_native_skill_identity_only_for_codex() {
+    fn pi_delivery_preserves_readable_skill_and_file_references() {
         let skill = skill("review", "/repo/with space/SKILL.md");
         let raw = format!(
             "Use {} on {}",
             skill.link(),
             crate::file_mentions::local_file_link("src/lib.rs", false)
         );
-        let codex = harness_prompt(&raw, crate::HarnessId::Codex);
-        assert_eq!(invocation_links(&codex)[0].1, skill);
-        assert!(codex.ends_with("[lib.rs](src/lib.rs)"));
-        for harness in [crate::HarnessId::ClaudeCode, crate::HarnessId::Opencode] {
+        for harness in HARNESSES {
             let prompt = harness_prompt(&raw, harness);
             assert_eq!(
                 prompt,
@@ -561,14 +533,10 @@ mod tests {
         assert_eq!(crate::file_mentions::file_mention_links(&raw).len(), 1);
         for harness in HARNESSES {
             let delivered = harness_prompt(&raw, harness);
-            if harness == crate::HarnessId::Codex {
-                assert_eq!(invocation_links(&delivered).len(), 2);
-            } else {
-                assert!(
-                    !delivered.contains(INVOCATION_SCHEME),
-                    "{harness:?}: {delivered}"
-                );
-            }
+            assert!(
+                !delivered.contains(INVOCATION_SCHEME),
+                "{harness:?}: {delivered}"
+            );
             assert!(!delivered.contains(crate::file_mentions::FILE_MENTION_SCHEME));
         }
     }
@@ -604,7 +572,7 @@ mod tests {
             "first /compact then [$review](/repo/a%20b/SKILL.md) finally"
         );
         assert_eq!(invocation_prompt("/$not-a-chip"), "/$not-a-chip");
-        assert!(invocation_links("[x](zeron-invoke:bad)").is_empty());
+        assert!(invocation_links("[x](paku-invoke:bad)").is_empty());
         for code in [
             format!("`{}`", command.link()),
             format!("```\n{}\n```", command.link()),

@@ -21,10 +21,11 @@ const PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const LATEST_PROTOCOL: &str = "2025-06-18";
 
 const INSTRUCTIONS: &str = "\
-Zeron runs coding agents in chats, each hosted on a device, optionally in a project \
-(a folder on that specific device). These tools operate the local Zeron engine: \
-discover devices/projects/chats, create chats with a chosen harness and \
-model, read transcripts, and send messages between chats.\n\
+Paku runs coding agents in chats, each hosted on a device, optionally in a project \
+(a folder on that specific device). These tools operate the local Paku engine: \
+discover devices/projects/chats, create Pi chats with a chosen model, \
+read transcripts, and send messages between chats. Pi is the only production \
+harness; legacy harness ids are rejected.\n\
 \n\
 Chats are referenced by full id, a unique id prefix, or an exact title. Use \
 `whoami` to learn which chat you are speaking from; messages you send are \
@@ -40,7 +41,9 @@ session visible in Sessions; it cannot have a parent. Use `kind: side` for a chi
 with an explicit parent or your origin chat. Omitted kind keeps legacy defaults: \
 side with an origin/parent, standalone otherwise. Side chats cannot create chats. \
 Discover hosts with `list_devices`, then `list_projects {device}`, \
-`list_harnesses {device}` and `list_models {device, harness}`. A project fixes \
+`list_harnesses {device}` and `list_models {device, harness: pi}`. Creation \
+defaults to Pi when available. Model catalogs are device-local and may include \
+OpenAI, Anthropic and other Pi providers. A project fixes \
 its host; with both project and device it must belong to that device. Use listed \
 ids when names/paths repeat. Without project or device, creation uses the local engine. \
 If a chat is `awaitingInput`, answer it with `respond_to_input`.";
@@ -153,7 +156,7 @@ pub async fn handle_request(tools: &Tools, id: Value, method: &str, params: Valu
                     "protocolVersion": version,
                     "capabilities": { "tools": { "listChanged": false } },
                     "serverInfo": {
-                        "name": "zeron",
+                        "name": "paku",
                         "version": env!("CARGO_PKG_VERSION"),
                     },
                     "instructions": INSTRUCTIONS,

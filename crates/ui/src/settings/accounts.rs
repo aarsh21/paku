@@ -1,9 +1,5 @@
-//! Settings → Providers / accounts (feature-inventory §1.9): provider cards
-//! (Claude Code, Codex, Cursor, Antigravity) with account rows — email, plan
-//! badge, Active, usage meters (indigo → amber ≥80% → red ≥95%, reset time),
-//! Switch / Forget — plus the one sign-in dialog every provider shares (the
-//! browser finishes the login on a loopback callback; Claude's paste-code
-//! step is its fallback) and account-shaped loading skeletons. Zeron
+//! Settings → Pi accounts: account rows, plan badges, usage meters,
+//! Switch / Forget actions and browser sign-in for Pi's model providers. Paku
 //! retargets devices from the settings sidebar (`targetDeviceId` passthrough;
 //! a remote device's callback is forwarded to this one engine-side).
 //!
@@ -18,13 +14,12 @@ use gpui::{
 };
 use std::time::Duration;
 
-use zeron_proto::{
-    AgentAccount, AgentAccountsSnapshot, AgentLoginMode, AgentLoginPoll, AgentLoginStart,
-    AgentLoginStatus, HarnessId,
+use paku_proto::{
+    AgentAccount, AgentAccountsSnapshot, AgentLoginPoll, AgentLoginStart, AgentLoginStatus,
+    HarnessId,
 };
-use zeron_rpc::methods;
+use paku_rpc::methods;
 
-use crate::composer::{ComposerInput, ComposerInputEvent};
 use crate::popover::{self, Loadable};
 use crate::settings::widgets;
 use crate::state::AppState;
@@ -142,7 +137,7 @@ fn open_login_url(url: &str, cx: &mut gpui::App) {
     }
 }
 
-/// Compact absolute reset moment (zeron settings.agents.tsx `formatReset`):
+/// Compact absolute reset moment (paku settings.agents.tsx `formatReset`):
 /// a local clock time ("3:45 PM") when it lands within ~22h, a short weekday
 /// ("Mon") within a week, else month + day ("Sep 14") — a weekday is noise
 /// when the window is a Codex free-tier MONTHLY reset weeks out. The caller
@@ -160,21 +155,11 @@ pub fn format_reset(resets_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> Opt
     })
 }
 
-/// The providers zeron can sign into, in display order: (harness, name, CLI
-/// command — named in the empty-state copy, zeron settings.agents.tsx
+/// The providers paku can sign into, in display order: (harness, name, CLI
+/// command — named in the empty-state copy, paku settings.agents.tsx
 /// `PROVIDERS`). Every agent with a login of its own is here; what each one
 /// supports is documented engine-side (`agent_accounts` module docs).
-pub const PROVIDERS: [(HarnessId, &str, &str); 9] = [
-    (HarnessId::ClaudeCode, "Claude Code", "claude"),
-    (HarnessId::Codex, "Codex", "codex"),
-    (HarnessId::Cursor, "Cursor", "cursor-agent"),
-    (HarnessId::Antigravity, "Antigravity", "Antigravity"),
-    (HarnessId::Grok, "Grok", "grok login"),
-    (HarnessId::Devin, "Devin", "devin auth login"),
-    (HarnessId::Opencode, "OpenCode", "opencode auth login"),
-    (HarnessId::Pi, "Pi", "pi"),
-    (HarnessId::Hermes, "Hermes", "hermes auth add"),
-];
+pub const PROVIDERS: [(HarnessId, &str, &str); 1] = [(HarnessId::Pi, "Pi", "pi")];
 
 /// Whether `harness` has an Accounts section (and sign-in flow). Pure.
 pub fn signs_in(harness: HarnessId) -> bool {
@@ -193,37 +178,15 @@ pub(crate) fn provider_name(harness: HarnessId) -> &'static str {
 /// Whether the provider reports plan usage. One that doesn't shows no meters
 /// and no "usage unavailable" note — there is nothing missing. Pure.
 pub fn reports_usage(harness: HarnessId) -> bool {
-    harness != HarnessId::Antigravity
+    harness == HarnessId::Pi
 }
 
-/// Providers whose agent holds exactly ONE login (Antigravity): once it is
-/// connected there is nothing to add — signing in again only re-confirms it.
-pub fn keeps_one_login(harness: HarnessId) -> bool {
-    harness == HarnessId::Antigravity
-}
-
-/// Whether zeron switches this agent's logins. Hermes rotates through its
-/// own credential pool (listed, never reordered); Antigravity keeps one.
+/// Pi switches logins within each model-provider group.
 pub fn switches_accounts(harness: HarnessId) -> bool {
-    !matches!(harness, HarnessId::Hermes | HarnessId::Antigravity)
+    harness == HarnessId::Pi
 }
 
-/// A standing note under a provider's Accounts label, for an agent whose
-/// accounts work differently. Hermes owns its credential pool: zeron lists
-/// it and adds to it through Hermes' own CLI, but never switches or removes
-/// its entries. Pure.
-pub fn provider_note(harness: HarnessId) -> Option<&'static str> {
-    match harness {
-        HarnessId::Hermes => Some(
-            "Hermes manages its own credential pool and rotates through it. Accounts added \
-             here go through `hermes auth add`; remove one with `hermes auth remove`.",
-        ),
-        _ => None,
-    }
-}
-
-/// One way to add an account: agents that keep a login PER model provider
-/// (OpenCode, Pi, Hermes) sign in to a named provider; the rest have one.
+/// One way to add an account: Pi signs in to a named model provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LoginOption {
     /// The engine's `provider` param (`None` = the agent's only login).
@@ -232,26 +195,15 @@ pub struct LoginOption {
     pub label: &'static str,
 }
 
-/// The sign-ins zeron offers for `harness`, in button order. Pure.
+/// The sign-ins paku offers for `harness`, in button order. Pure.
 pub fn login_options(harness: HarnessId) -> Vec<LoginOption> {
     let option = |provider, label| LoginOption {
         provider: Some(provider),
         label,
     };
     match harness {
-        HarnessId::Opencode => vec![
-            option("openai", "ChatGPT"),
-            option("github-copilot", "GitHub Copilot"),
-        ],
         HarnessId::Pi => vec![option("openai-codex", "ChatGPT")],
-        HarnessId::Hermes => vec![
-            option("openai-codex", "ChatGPT"),
-            option("nous", "Nous Portal"),
-        ],
-        _ => vec![LoginOption {
-            provider: None,
-            label: provider_name(harness),
-        }],
+        _ => Vec::new(),
     }
 }
 
@@ -278,41 +230,9 @@ pub fn add_option_label(harness: HarnessId, option: LoginOption, empty: bool) ->
 /// per provider, same shape. Pure.
 fn login_copy(harness: HarnessId, provider: Option<&str>) -> &'static str {
     match (harness, provider) {
-        (HarnessId::ClaudeCode, _) => {
-            "Finish signing in to Claude in your browser. The new login is saved next to \
-             your current one — nothing changes until you switch."
-        }
-        (HarnessId::Codex, _) => {
-            "Finish signing in to ChatGPT in your browser. The new login is saved next to \
-             your current one — nothing changes until you switch."
-        }
-        (HarnessId::Cursor, _) => {
-            "Finish signing in to Cursor in your browser. This mints a zeron-named API key \
-             you can revoke any time from Cursor's dashboard."
-        }
-        (HarnessId::Antigravity, _) => {
-            "Finish signing in to Google in your browser. Antigravity keeps one login on \
-             this device; if it is already signed in, this just confirms it."
-        }
-        (HarnessId::Grok, _) => {
-            "Finish signing in to Grok in your browser — approve the code shown below. The \
-             new login is saved next to your current one — nothing changes until you switch."
-        }
-        (HarnessId::Devin, _) => {
-            "Finish signing in to Devin in your browser. The new login is saved next to your \
-             current one — nothing changes until you switch."
-        }
-        (HarnessId::Opencode, Some("github-copilot")) => {
-            "Finish signing in to GitHub in your browser — enter the code shown below. The \
-             new login is saved next to your current one — nothing changes until you switch."
-        }
-        (HarnessId::Opencode | HarnessId::Pi, _) => {
+        (HarnessId::Pi, Some("openai-codex") | None) => {
             "Finish signing in to ChatGPT in your browser. The agent gets its own login, saved \
              next to any current one — nothing changes until you switch."
-        }
-        (HarnessId::Hermes, _) => {
-            "Finish signing in in your browser — enter the code shown below. Hermes adds the \
-             login to its own credential pool and rotates through it itself."
         }
         _ => "Finish signing in in your browser.",
     }
@@ -347,7 +267,7 @@ pub fn mark_switched(snapshot: &mut AgentAccountsSnapshot, account: &AgentAccoun
 /// One mini meter line of the usage column: label, a short bar, percent.
 /// The reset moment rides the row's tooltip instead of taking a column.
 pub(crate) fn render_usage_meter(
-    window: &zeron_proto::AgentUsageWindow,
+    window: &paku_proto::AgentUsageWindow,
     theme: &Theme,
 ) -> AnyElement {
     let fraction = window.used_fraction.clamp(0.0, 1.0);
@@ -384,7 +304,7 @@ pub(crate) fn render_usage_meter(
                         div()
                             .h_full()
                             // A 1.5% floor keeps tiny non-zero usage
-                            // visible (zeron `max(used, 1.5)%`).
+                            // visible (paku `max(used, 1.5)%`).
                             .w(gpui::relative(fraction.max(0.015)))
                             .rounded_full()
                             .bg(fill),
@@ -412,8 +332,7 @@ pub(crate) fn render_usage_meter(
 // Entity
 // ---------------------------------------------------------------------------
 
-/// One sign-in, whichever provider: started, then waiting on the browser
-/// (or, Claude's fallback, on a pasted code), until it lands or fails.
+/// A Pi model-provider sign-in, waiting on the browser until it lands or fails.
 struct LoginFlow {
     harness: HarnessId,
     /// The model provider signed in to, for per-provider agents.
@@ -432,11 +351,6 @@ struct LoginFlow {
 enum LoginStep {
     /// Starting, then waiting for the browser to reach the loopback callback.
     Browser { message: Option<SharedString> },
-    /// Claude's fallback when no loopback port could be bound.
-    PasteCode {
-        submitting: bool,
-        error: Option<SharedString>,
-    },
     /// The start, a poll, or the provider failed — shown with Retry.
     Failed { message: SharedString },
 }
@@ -485,7 +399,7 @@ pub struct AccountsPage {
     embedded_harness: Option<HarnessId>,
     scroll: widgets::PageScroll,
     /// Which device's logins are shown; `None` = this device (no passthrough).
-    /// Retargeted by the page-header device switcher (zeron parity: the
+    /// Retargeted by the page-header device switcher (paku parity: the
     /// accounts RPCs are relay-forwardable, CLI logins are per-device).
     target_device: Option<String>,
     device_select: widgets::SelectState,
@@ -499,12 +413,10 @@ pub struct AccountsPage {
     login: Option<LoginFlow>,
     login_attempts: u64,
     error: Option<SharedString>,
-    code_input: Entity<ComposerInput>,
     load_task: Option<Task<()>>,
     action_task: Option<Task<()>>,
     poll_task: Option<Task<()>>,
     _observe: Subscription,
-    _code_events: Subscription,
 }
 
 impl AccountsPage {
@@ -529,12 +441,6 @@ impl AccountsPage {
         cx: &mut Context<Self>,
     ) -> Self {
         let observe = cx.observe(&state, |_, _, cx| cx.notify());
-        let code_input = cx.new(|cx| ComposerInput::new("Paste the authorization code", cx));
-        let code_events = cx.subscribe(&code_input, |this: &mut Self, _, event, cx| {
-            if matches!(event, ComposerInputEvent::Submitted) {
-                this.submit_code(cx);
-            }
-        });
         let mut page = Self {
             state,
             embedded,
@@ -549,12 +455,10 @@ impl AccountsPage {
             login: None,
             login_attempts: 0,
             error: None,
-            code_input,
             load_task: None,
             action_task: None,
             poll_task: None,
             _observe: observe,
-            _code_events: code_events,
         };
         // Paint from the last list (this session) or the engine's persisted
         // usage, then force one probe to update in place — the skeleton only
@@ -611,7 +515,7 @@ impl AccountsPage {
         }
     }
 
-    /// The page-header device switcher (zeron device-switcher.tsx): a quiet
+    /// The page-header device switcher (paku device-switcher.tsx): a quiet
     /// trigger — platform glyph · name · presence dot · sort glyph — opening a
     /// dropdown of every registered device. Selecting one retargets the page.
     fn render_device_switcher(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -620,7 +524,7 @@ impl AccountsPage {
             let s = self.state.read(cx);
             (s.devices.clone(), s.local_device_id.clone())
         };
-        // Stable row order (registration time, then id) — zeron's switcher
+        // Stable row order (registration time, then id) — paku's switcher
         // sorts the same way so rows never reshuffle on heartbeats.
         devices.sort_by(|a, b| {
             a.created_at
@@ -880,17 +784,7 @@ impl AccountsPage {
                     flow.url = Some(start.url.clone());
                 }
                 flow.login_id = Some(start.login_id);
-                match start.mode {
-                    AgentLoginMode::PasteCode => {
-                        flow.step = LoginStep::PasteCode {
-                            submitting: false,
-                            error: None,
-                        };
-                        self.code_input
-                            .update(cx, |input, cx| input.set_text("", cx));
-                    }
-                    AgentLoginMode::Browser => self.spawn_poll(cx),
-                }
+                self.spawn_poll(cx);
             }
             Err(error) => {
                 flow.step = LoginStep::Failed {
@@ -898,57 +792,6 @@ impl AccountsPage {
                 };
             }
         }
-        cx.notify();
-    }
-
-    fn submit_code(&mut self, cx: &mut Context<Self>) {
-        let Some(LoginFlow {
-            login_id: Some(login_id),
-            step: LoginStep::PasteCode { submitting, .. },
-            attempt,
-            ..
-        }) = &mut self.login
-        else {
-            return;
-        };
-        if *submitting {
-            return;
-        }
-        let code = self.code_input.read(cx).text().trim().to_string();
-        if code.is_empty() {
-            return;
-        }
-        let (login_id, attempt) = (login_id.clone(), *attempt);
-        let Some(engine) = self.state.read(cx).engine().cloned() else {
-            return;
-        };
-        *submitting = true;
-        let params = self.params(serde_json::json!({ "loginId": login_id, "code": code }));
-        self.action_task = Some(cx.spawn(async move |this, cx| {
-            let result = engine
-                .client()
-                .call(methods::COMPLETE_AGENT_LOGIN, params)
-                .await;
-            this.update(cx, |page, cx| {
-                let Some(flow) = page.login.as_mut().filter(|f| f.attempt == attempt) else {
-                    return;
-                };
-                match result {
-                    Ok(_) => {
-                        page.login = None;
-                        page.load(force_usage_for(LoadTrigger::PostLogin), cx);
-                    }
-                    Err(err) => {
-                        flow.step = LoginStep::PasteCode {
-                            submitting: false,
-                            error: Some(format!("{err}").into()),
-                        };
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        }));
         cx.notify();
     }
 
@@ -1020,8 +863,7 @@ impl AccountsPage {
                     true
                 }
                 AgentLoginStatus::Pending => {
-                    // A page learned after the start (Antigravity prints its
-                    // own once its server is up): open it once.
+                    // A page learned after the start: open it once.
                     if let Some(url) = poll.url.filter(|url| flow.url.as_ref() != Some(url)) {
                         open_login_url(&url, cx);
                         flow.url = Some(url);
@@ -1048,7 +890,7 @@ impl AccountsPage {
             // A failed login is already over engine-side.
             Some(LoginFlow {
                 login_id: Some(login_id),
-                step: LoginStep::Browser { .. } | LoginStep::PasteCode { .. },
+                step: LoginStep::Browser { .. },
                 ..
             }) => Some(login_id),
             _ => None,
@@ -1095,12 +937,7 @@ impl AccountsPage {
             return None;
         }
         let note = if !account.switchable && switches_accounts(account.harness) {
-            match account.harness {
-                // Keychain denied: the login is there, its secret isn't.
-                HarnessId::ClaudeCode => "Credentials unavailable".to_string(),
-                // An opaque token whose account couldn't be looked up.
-                _ => "Couldn't identify this login".to_string(),
-            }
+            "Couldn't identify this login".to_string()
         } else if let Some(reason) = &account.usage_error {
             // The engine's reason ("Rate limited by Anthropic — retrying in
             // 2m", "Signed out — sign in again"), not a bare shrug.
@@ -1162,7 +999,7 @@ impl AccountsPage {
         let can_switch = !account.active && account.switchable;
         let switch_account = account.clone();
 
-        // Personal Claude orgs are named "<email>'s Organization" — noise
+        // Personal provider orgs are named "<email>'s Organization" — noise
         // right under the email itself.
         let organization = account.organization.clone().filter(|org| {
             account
@@ -1341,8 +1178,7 @@ impl AccountsPage {
                 self.row_menu.closing_since(),
             ));
         }
-        // Accounts with nothing to offer (an unreadable live login,
-        // Antigravity's single login) keep the slot for alignment only.
+        // An unreadable live login keeps the actions slot for alignment only.
         let has_actions = account.switchable;
 
         let body = div()
@@ -1401,7 +1237,7 @@ impl AccountsPage {
     /// same geometry, so loaded rows land without a layout jump.
     fn render_embedded_skeleton(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         use crate::motion;
-        let delta = motion::pulse_delta(&motion::ZERON_PULSE, cx.entity_id(), cx);
+        let delta = motion::pulse_delta(&motion::PAKU_PULSE, cx.entity_id(), cx);
         let ghost = |w: f32, h: f32| {
             div()
                 .flex_none()
@@ -1466,8 +1302,7 @@ impl AccountsPage {
     /// The sign-in dialog — one layout for every provider: what to do in the
     /// browser, a way back to the page, then the progress line (or, on
     /// failure, the reason in the same place), with Cancel — or Close and
-    /// Retry — on the right. Claude's paste-code fallback swaps the progress
-    /// line for the code field.
+    /// Retry — on the right.
     fn render_login_dialog(
         &mut self,
         viewport: gpui::Size<gpui::Pixels>,
@@ -1485,15 +1320,8 @@ impl AccountsPage {
                 .role(gpui::Role::Button)
                 .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
         };
-        let copy = match login.step {
-            LoginStep::PasteCode { .. } => {
-                "Your browser opened Claude's sign-in page. Approve access, then paste the \
-                 code Anthropic shows you below. Your current login is untouched until you \
-                 switch."
-            }
-            _ => login_copy(login.harness, login.provider),
-        };
-        // "Reopen the sign-in page" (zeron: `text-[12px]
+        let copy = login_copy(login.harness, login.provider);
+        // "Reopen the sign-in page" (paku: `text-[12px]
         // text-muted-foreground/60 hover:underline`), once there is a page.
         let reopen = login.url.clone().filter(|_| !failed).map(|url| {
             div()
@@ -1537,18 +1365,6 @@ impl AccountsPage {
                         .child(login.status()),
                 )
                 .into_any_element(),
-            LoginStep::PasteCode { error, .. } => div()
-                .mt(px(12.0))
-                .flex()
-                .flex_col()
-                .gap(px(8.0))
-                .child(
-                    popover::dialog_field(self.code_input.clone().into_any_element())
-                        .font_family(theme.font_mono.clone())
-                        .text_size(crate::typography::ui_rems(13.0)),
-                )
-                .when_some(error.clone(), |el, message| el.child(error_line(message)))
-                .into_any_element(),
             LoginStep::Failed { message } => div()
                 .mt(px(16.0))
                 .child(error_line(message.clone()))
@@ -1565,27 +1381,6 @@ impl AccountsPage {
                 action("login-cancel", widgets::ActionTone::Quiet, "Cancel")
                     .on_click(cx.listener(|this, _, _, cx| this.cancel_login(cx))),
             ),
-            LoginStep::PasteCode { submitting, .. } => {
-                let submitting = *submitting;
-                buttons
-                    .child(
-                        action("login-cancel", widgets::ActionTone::Quiet, "Cancel")
-                            .on_click(cx.listener(|this, _, _, cx| this.cancel_login(cx))),
-                    )
-                    .child(
-                        action(
-                            "login-submit-code",
-                            widgets::ActionTone::Solid,
-                            if submitting {
-                                "Verifying…"
-                            } else {
-                                "Add account"
-                            },
-                        )
-                        .when(submitting, |el| el.opacity(0.5))
-                        .on_click(cx.listener(|this, _, _, cx| this.submit_code(cx))),
-                    )
-            }
             LoginStep::Failed { .. } => buttons
                 .child(
                     action("login-cancel", widgets::ActionTone::Quiet, "Close")
@@ -1615,7 +1410,7 @@ impl AccountsPage {
         Some(popover::modal("add-account-dialog", viewport, card))
     }
 
-    /// A ghost account row (zeron settings.agents.tsx `SkeletonRow`): avatar,
+    /// A ghost account row (paku settings.agents.tsx `SkeletonRow`): avatar,
     /// email line, two usage-meter ghosts, a badge — same geometry as the real
     /// row so loaded data lands without a layout jump. `dim` fades row two.
     fn render_skeleton_row(
@@ -1627,7 +1422,7 @@ impl AccountsPage {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use crate::motion;
-        let delta = motion::pulse_delta(&motion::ZERON_PULSE, cx.entity_id(), cx);
+        let delta = motion::pulse_delta(&motion::PAKU_PULSE, cx.entity_id(), cx);
         let ghost = |w: gpui::Length, h: f32, round_full: bool| {
             div()
                 .w(w)
@@ -1752,45 +1547,42 @@ impl AccountsPage {
                         .collect();
                     let empty = rows.is_empty();
                     // Adding is the list's last row, not a header button —
-                    // it sits where the next account will appear. A
-                    // one-login agent that is connected has nothing to add.
-                    let add_row = (empty || !keeps_one_login(harness)).then(|| {
-                        div()
-                            .py(px(8.0))
-                            .flex()
-                            .flex_row()
-                            .flex_wrap()
-                            .gap(px(4.0))
-                            .when(!empty, |el| {
-                                el.border_t_1().border_color(widgets::row_divider(theme))
-                            })
-                            .children(login_options(harness).into_iter().enumerate().map(
-                                |(ix, option)| {
-                                    let label = add_option_label(harness, option, empty);
-                                    widgets::action_button(theme, widgets::ActionTone::Quiet)
-                                        .id(("accounts-add", ix))
-                                        .when(ix == 0, |el| el.ml(px(-10.0)))
-                                        .role(gpui::Role::Button)
-                                        .aria_label(label.clone())
-                                        .tab_index(0)
-                                        .focus_visible(|s| s.border_2().border_color(theme.accent))
-                                        .on_click(cx.listener(move |page, _, _, cx| {
-                                            page.start_login(harness, option.provider, cx)
-                                        }))
-                                        .child(
-                                            crate::icons::icon(crate::icons::PLUS)
-                                                .size(px(14.0))
-                                                .text_color(theme.text_muted),
-                                        )
-                                        .child(SharedString::from(label))
-                                },
-                            ))
-                    });
+                    // it sits where the next Pi account will appear.
+                    let add_row = div()
+                        .py(px(8.0))
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .gap(px(4.0))
+                        .when(!empty, |el| {
+                            el.border_t_1().border_color(widgets::row_divider(theme))
+                        })
+                        .children(login_options(harness).into_iter().enumerate().map(
+                            |(ix, option)| {
+                                let label = add_option_label(harness, option, empty);
+                                widgets::action_button(theme, widgets::ActionTone::Quiet)
+                                    .id(("accounts-add", ix))
+                                    .when(ix == 0, |el| el.ml(px(-10.0)))
+                                    .role(gpui::Role::Button)
+                                    .aria_label(label.clone())
+                                    .tab_index(0)
+                                    .focus_visible(|s| s.border_2().border_color(theme.accent))
+                                    .on_click(cx.listener(move |page, _, _, cx| {
+                                        page.start_login(harness, option.provider, cx)
+                                    }))
+                                    .child(
+                                        crate::icons::icon(crate::icons::PLUS)
+                                            .size(px(14.0))
+                                            .text_color(theme.text_muted),
+                                    )
+                                    .child(SharedString::from(label))
+                            },
+                        ));
                     div()
                         .flex()
                         .flex_col()
                         .children(rows)
-                        .children(add_row)
+                        .child(add_row)
                         .into_any_element()
                 }
             };
@@ -1863,15 +1655,6 @@ impl AccountsPage {
                     .collect::<Vec<_>>(),
                 _ => Vec::new(),
             })
-            .when_some(provider_note(harness), |el, note| {
-                el.child(
-                    div()
-                        .mt(px(4.0))
-                        .text_size(crate::typography::ui_rems(12.0))
-                        .text_color(theme.text_muted)
-                        .child(SharedString::from(note)),
-                )
-            })
             .child(content)
             .when_some(dialog, |el, dialog| el.child(dialog))
             .into_any_element()
@@ -1893,24 +1676,9 @@ impl Render for AccountsPage {
             .map(|s| s.accounts.len())
             .filter(|&n| n > 0);
 
-        let provider_icon = |harness: HarnessId| match harness {
-            HarnessId::Codex => (crate::icons::OPENAI_MARK, None),
-            HarnessId::Cursor => (crate::icons::CURSOR_MARK, None),
-            HarnessId::Devin => (crate::icons::DEVIN_MARK, None),
-            HarnessId::Grok => (crate::icons::GROK_MARK, None),
-            HarnessId::Hermes => (crate::icons::HERMES_MARK, None),
-            HarnessId::Pi => (crate::icons::PI_MARK, None),
-            HarnessId::Opencode => (crate::icons::OPENCODE_MARK, None),
-            HarnessId::Antigravity => (crate::icons::ANTIGRAVITY_MARK, None),
-            _ => (
-                crate::icons::CLAUDE_MARK,
-                Some(crate::icons::claude_brand()),
-            ),
-        };
-        // Brand mark inside a 24px centered box (zeron: `grid size-6
+        // Brand mark inside a 24px centered box (paku: `grid size-6
         // place-items-center [&_svg]:size-4`).
-        let provider_mark = |harness: HarnessId, theme: &Theme| {
-            let (mark, tint) = provider_icon(harness);
+        let provider_mark = |_harness: HarnessId, theme: &Theme| {
             div()
                 .flex_none()
                 .size(px(24.0))
@@ -1918,29 +1686,19 @@ impl Render for AccountsPage {
                 .items_center()
                 .justify_center()
                 .child(
-                    crate::icons::icon(mark)
+                    crate::icons::icon(crate::icons::PI_MARK)
                         .size(px(16.0))
-                        .text_color(tint.unwrap_or(theme.text_muted)),
+                        .text_color(theme.text_muted),
                 )
         };
 
-        // One section per provider (zeron settings.agents.tsx `ProviderSection`):
+        // One section per provider (paku settings.agents.tsx `ProviderSection`):
         // brand header + Add account, then the account rows card.
         let sections: Vec<AnyElement> = match &self.snapshot {
             Loadable::Idle | Loadable::Loading => PROVIDERS
                 .into_iter()
                 .map(|(harness, name, _cli)| {
-                    let skeleton_id = match harness {
-                        HarnessId::Codex => "accounts-skeleton-codex",
-                        HarnessId::Cursor => "accounts-skeleton-cursor",
-                        HarnessId::Antigravity => "accounts-skeleton-antigravity",
-                        HarnessId::Grok => "accounts-skeleton-grok",
-                        HarnessId::Devin => "accounts-skeleton-devin",
-                        HarnessId::Opencode => "accounts-skeleton-opencode",
-                        HarnessId::Pi => "accounts-skeleton-pi",
-                        HarnessId::Hermes => "accounts-skeleton-hermes",
-                        _ => "accounts-skeleton-claude",
-                    };
+                    let skeleton_id = "accounts-skeleton-pi";
                     div()
                         .mt(px(24.0))
                         .flex()
@@ -2012,7 +1770,7 @@ impl Render for AccountsPage {
                     .into_iter()
                     .map(|(harness, name, cli)| {
                         let accounts = provider_accounts(&snapshot, harness);
-                        // EVERY warning renders its own strip (zeron maps them).
+                        // EVERY warning renders its own strip (paku maps them).
                         let warnings: Vec<String> = snapshot
                             .warnings
                             .iter()
@@ -2028,22 +1786,11 @@ impl Render for AccountsPage {
                             .collect();
                         let add_id: SharedString = format!("add-account-{name}").into();
                         let empty = rows.is_empty();
-                        let can_add = empty || !keeps_one_login(harness);
                         let card = widgets::section_card(&theme).mt(px(8.0));
-                        let empty_copy = match harness {
-                            // Cursor's app login is SEPARATE from `cursor-agent
-                            // login` — pointing at the CLI would send users to a
-                            // sign-in that does not light this up. Antigravity
-                            // has no CLI login at all.
-                            HarnessId::Cursor | HarnessId::Antigravity => format!(
-                                "{name} isn't connected on this device — connect it to run \
-                                 {name} sessions."
-                            ),
-                            _ => format!(
-                                "No {name} login detected on this device — sign in \
-                                 with \u{201C}{cli}\u{201D} or add an account."
-                            ),
-                        };
+                        let empty_copy = format!(
+                            "No {name} login detected on this device — sign in \
+                             with \u{201C}{cli}\u{201D} or add an account."
+                        );
                         let card = if empty {
                             card.child(
                                 div()
@@ -2080,7 +1827,7 @@ impl Render for AccountsPage {
                                             .child(SharedString::from(name)),
                                     )
                                     .child(div().flex_1())
-                                    .when(can_add, |header| {
+                                    .when(signs_in(harness), |header| {
                                         header.children(
                                             login_options(harness).into_iter().enumerate().map(
                                                 |(ix, option)| {
@@ -2122,13 +1869,6 @@ impl Render for AccountsPage {
                                     .into_iter()
                                     .map(|warning| widgets::warning_strip(&theme, warning)),
                             )
-                            .children(provider_note(harness).map(|note| {
-                                div()
-                                    .mt(px(8.0))
-                                    .text_size(crate::typography::ui_rems(12.0))
-                                    .text_color(theme.text_muted)
-                                    .child(SharedString::from(note))
-                            }))
                             .child(card)
                             .into_any_element()
                     })
@@ -2143,77 +1883,93 @@ impl Render for AccountsPage {
             .size_full()
             .on_hover(cx.listener(Self::on_scroll_hovered))
             .child(
-                crate::edge_fade::edge_faded(16.0, true, true, div()
-                    .id("accounts-page")
-                    .size_full()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll.scroll)
-                    .child(
-                        widgets::page_column()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .flex_wrap()
-                                    .items_center()
-                                    .gap(px(10.0))
-                                    .child(widgets::page_header(&theme, "Accounts", account_count))
-                                    .child(div().flex_1())
-                                    .child(
-                                        // `text-[12.5px]` + leading 16px Refresh icon,
-                                        // dimmed while a refresh is in flight (zeron
-                                        // `disabled:opacity-50`).
-                                        widgets::ghost_action(&theme)
-                                            .id("accounts-refresh")
-                                            .flex_none()
-                                            .text_size(crate::typography::ui_rems(12.5))
-                                            .when(refreshing, |el| el.opacity(0.5))
-                                            .tab_index(0)
-.role(gpui::Role::Button)
-.focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-.on_click(cx.listener(|this, _, _, cx| {
-                                                this.load(
-                                                    force_usage_for(LoadTrigger::Refresh),
-                                                    cx,
+                crate::edge_fade::edge_faded(
+                    16.0,
+                    true,
+                    true,
+                    div()
+                        .id("accounts-page")
+                        .size_full()
+                        .overflow_y_scroll()
+                        .track_scroll(&self.scroll.scroll)
+                        .child(
+                            widgets::page_column()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .flex_wrap()
+                                        .items_center()
+                                        .gap(px(10.0))
+                                        .child(widgets::page_header(
+                                            &theme,
+                                            "Accounts",
+                                            account_count,
+                                        ))
+                                        .child(div().flex_1())
+                                        .child(
+                                            // `text-[12.5px]` + leading 16px Refresh icon,
+                                            // dimmed while a refresh is in flight (paku
+                                            // `disabled:opacity-50`).
+                                            widgets::ghost_action(&theme)
+                                                .id("accounts-refresh")
+                                                .flex_none()
+                                                .text_size(crate::typography::ui_rems(12.5))
+                                                .when(refreshing, |el| el.opacity(0.5))
+                                                .tab_index(0)
+                                                .role(gpui::Role::Button)
+                                                .focus_visible(|s| {
+                                                    s.border_2()
+                                                        .border_color(theme.accent)
+                                                        .opacity(1.0)
+                                                })
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.load(
+                                                        force_usage_for(LoadTrigger::Refresh),
+                                                        cx,
+                                                    )
+                                                }))
+                                                .child(
+                                                    crate::icons::icon(crate::icons::REFRESH)
+                                                        .size(px(16.0))
+                                                        .text_color(theme.text_muted),
                                                 )
-                                            }))
-                                            .child(
-                                                crate::icons::icon(crate::icons::REFRESH)
-                                                    .size(px(16.0))
-                                                    .text_color(theme.text_muted),
-                                            )
-                                            .child(SharedString::from("Refresh")),
-                                    )
-                                    .child(self.render_device_switcher(&theme, cx)),
-                            )
-                            .when_some(self.error.clone(), |el, message| {
-                                el.child(
-                                    widgets::error_strip(&theme, message)
-                                        .id("accounts-action-error")
-                                        .cursor_pointer()
-                                        .tab_index(0)
-.role(gpui::Role::Button)
-.focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-.on_click(cx.listener(|this, _, _, cx| {
-                                            this.error = None;
-                                            cx.notify();
-                                        })),
+                                                .child(SharedString::from("Refresh")),
+                                        )
+                                        .child(self.render_device_switcher(&theme, cx)),
                                 )
-                            })
-                            .children(sections)
-                            // Footer note (zeron: `mt-6 text-[12px] leading-relaxed
-                            // text-muted-foreground/60`).
-                            .child(
-                                div()
-                                    .mt(px(24.0))
-                                    .text_size(crate::typography::ui_rems(12.0))
-                                    .line_height(px(19.0))
-                                    .text_color(theme.text_muted)
-                                    .child(SharedString::from(
-                                        "Account changes affect new sessions. On macOS, Claude Code may take about 30 seconds to pick up a switched account.",
-                                    )),
-                            ),
-                    )).fade_overflow_y(&self.scroll.scroll),
+                                .when_some(self.error.clone(), |el, message| {
+                                    el.child(
+                                        widgets::error_strip(&theme, message)
+                                            .id("accounts-action-error")
+                                            .cursor_pointer()
+                                            .tab_index(0)
+                                            .role(gpui::Role::Button)
+                                            .focus_visible(|s| {
+                                                s.border_2().border_color(theme.accent).opacity(1.0)
+                                            })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.error = None;
+                                                cx.notify();
+                                            })),
+                                    )
+                                })
+                                .children(sections)
+                                // Footer note (paku: `mt-6 text-[12px] leading-relaxed
+                                // text-muted-foreground/60`).
+                                .child(
+                                    div()
+                                        .mt(px(24.0))
+                                        .text_size(crate::typography::ui_rems(12.0))
+                                        .line_height(px(19.0))
+                                        .text_color(theme.text_muted)
+                                        .child(SharedString::from(
+                                            "Account changes affect new sessions.",
+                                        )),
+                                ),
+                        ),
+                )
+                .fade_overflow_y(&self.scroll.scroll),
             )
             .children(scrollbar)
             .when_some(dialog, |el, dialog| el.child(dialog))
@@ -2258,7 +2014,7 @@ mod tests {
     }
 
     #[test]
-    fn usage_thresholds_match_zeron() {
+    fn usage_thresholds_match_paku() {
         assert_eq!(usage_level(0.0), UsageLevel::Normal);
         assert_eq!(usage_level(0.79), UsageLevel::Normal);
         assert_eq!(usage_level(0.80), UsageLevel::Warn);
@@ -2311,72 +2067,46 @@ mod tests {
     }
 
     #[test]
-    fn every_sign_in_provider_shares_one_accounts_flow() {
-        for harness in [
-            HarnessId::ClaudeCode,
-            HarnessId::Codex,
-            HarnessId::Cursor,
-            HarnessId::Antigravity,
-            HarnessId::Grok,
-            HarnessId::Devin,
-        ] {
-            assert!(signs_in(harness), "{harness:?}");
-            assert!(add_account_label(harness, true).starts_with("Connect a "));
-            assert_eq!(add_account_label(harness, false), "Add account");
-            assert!(login_copy(harness, None).starts_with("Finish signing in to "));
-            // One login per agent: one add button, no provider param.
-            let options = login_options(harness);
-            assert_eq!(options.len(), 1, "{harness:?}");
-            assert_eq!(options[0].provider, None);
-            assert_eq!(add_option_label(harness, options[0], false), "Add account");
-        }
-        assert_eq!(
-            add_account_label(HarnessId::Antigravity, true),
-            "Connect a Antigravity account"
-        );
-        // Every agent with a login of its own has an Accounts section.
-        for harness in [HarnessId::Opencode, HarnessId::Pi, HarnessId::Hermes] {
-            assert!(signs_in(harness), "{harness:?}");
-            assert!(reports_usage(harness));
-            for option in login_options(harness) {
-                assert!(option.provider.is_some(), "{harness:?} names its provider");
-                assert!(login_copy(harness, option.provider).starts_with("Finish signing in"));
-            }
-        }
+    fn only_pi_offers_accounts_and_usage() {
+        assert_eq!(PROVIDERS, [(HarnessId::Pi, "Pi", "pi")]);
+        assert!(signs_in(HarnessId::Pi));
+        assert!(reports_usage(HarnessId::Pi));
+        assert!(switches_accounts(HarnessId::Pi));
         assert!(!signs_in(HarnessId::Mock));
-        // Antigravity has no quota to show and keeps a single login.
-        assert!(!reports_usage(HarnessId::Antigravity) && reports_usage(HarnessId::Codex));
-        assert!(keeps_one_login(HarnessId::Antigravity) && !keeps_one_login(HarnessId::Cursor));
-        // Hermes rotates its own pool; zeron never switches it, and says so.
-        assert!(!switches_accounts(HarnessId::Hermes) && switches_accounts(HarnessId::Grok));
-        assert!(provider_note(HarnessId::Hermes).is_some_and(|n| n.contains("hermes auth add")));
-        assert!(provider_note(HarnessId::Grok).is_none());
+        assert!(!reports_usage(HarnessId::Mock));
+        assert!(!switches_accounts(HarnessId::Mock));
+        assert!(login_options(HarnessId::Mock).is_empty());
+        assert_eq!(
+            add_account_label(HarnessId::Pi, true),
+            "Connect a Pi account"
+        );
+        assert_eq!(add_account_label(HarnessId::Pi, false), "Add account");
     }
 
     #[test]
-    fn per_provider_agents_offer_one_sign_in_per_provider() {
-        let opencode = login_options(HarnessId::Opencode);
-        let labels: Vec<_> = opencode.iter().map(|o| o.label).collect();
-        assert_eq!(labels, ["ChatGPT", "GitHub Copilot"]);
+    fn pi_sign_in_names_its_openai_model_provider() {
+        let options = login_options(HarnessId::Pi);
         assert_eq!(
-            add_option_label(HarnessId::Opencode, opencode[0], true),
+            options,
+            [LoginOption {
+                provider: Some("openai-codex"),
+                label: "ChatGPT"
+            }]
+        );
+        assert_eq!(
+            add_option_label(HarnessId::Pi, options[0], true),
             "Connect ChatGPT"
         );
         assert_eq!(
-            add_option_label(HarnessId::Opencode, opencode[1], false),
-            "Add GitHub Copilot account"
+            add_option_label(HarnessId::Pi, options[0], false),
+            "Add ChatGPT account"
         );
-        let providers: Vec<_> = login_options(HarnessId::Hermes)
-            .iter()
-            .map(|o| o.provider.unwrap())
-            .collect();
-        assert_eq!(providers, ["openai-codex", "nous"]);
+        assert!(login_copy(HarnessId::Pi, options[0].provider).contains("ChatGPT"));
         let flow = LoginFlow {
-            provider: Some("openai-codex"),
+            provider: options[0].provider,
             ..waiting(HarnessId::Pi, 1)
         };
         assert_eq!(flow.title(), "Sign in to ChatGPT for Pi");
-        assert_eq!(waiting(HarnessId::Grok, 1).title(), "Sign in to Grok");
     }
 
     #[test]
@@ -2399,10 +2129,10 @@ mod tests {
         };
         let mut snapshot = AgentAccountsSnapshot {
             accounts: vec![
-                row("gpt-a", HarnessId::Opencode, Some("openai"), true),
-                row("gpt-b", HarnessId::Opencode, Some("openai"), false),
-                row("copilot", HarnessId::Opencode, Some("github-copilot"), true),
-                row("grok-a", HarnessId::Grok, None, true),
+                row("gpt-a", HarnessId::Pi, Some("openai-codex"), true),
+                row("gpt-b", HarnessId::Pi, Some("openai-codex"), false),
+                row("anthropic", HarnessId::Pi, Some("anthropic"), true),
+                row("mock", HarnessId::Mock, None, true),
             ],
             warnings: vec![],
         };
@@ -2414,7 +2144,7 @@ mod tests {
             .filter(|a| a.active)
             .map(|a| a.id.as_str())
             .collect();
-        assert_eq!(live, ["gpt-b", "copilot", "grok-a"]);
+        assert_eq!(live, ["gpt-b", "anthropic", "mock"]);
     }
 
     fn page(cx: &mut gpui::TestAppContext) -> gpui::WindowHandle<AccountsPage> {
@@ -2427,7 +2157,7 @@ mod tests {
         });
         cx.add_window(|_, cx| {
             let state = cx.new(|_| crate::state::AppState::new());
-            AccountsPage::new_embedded(state, None, HarnessId::Antigravity, cx)
+            AccountsPage::new_embedded(state, None, HarnessId::Pi, cx)
         })
     }
 
@@ -2459,12 +2189,12 @@ mod tests {
         window
             .update(cx, |page, _, cx| {
                 // Starting: the dialog's progress line before any page.
-                page.login = Some(waiting(HarnessId::Antigravity, 1));
+                page.login = Some(waiting(HarnessId::Pi, 1));
                 let flow = page.login.as_ref().unwrap();
-                assert_eq!(flow.title(), "Sign in to Antigravity");
+                assert_eq!(flow.title(), "Sign in to Pi");
                 assert_eq!(flow.status().as_ref(), "Starting sign-in…");
                 // The page arrives with a poll: opened once, then waited on.
-                let url = "https://accounts.google.com/o/oauth2/auth?x=1";
+                let url = "https://auth.openai.com/authorize?x=1";
                 assert!(!page.apply_poll(
                     1,
                     Ok(poll(AgentLoginStatus::Pending, None, Some(url))),
@@ -2485,7 +2215,7 @@ mod tests {
                 assert!(page.login.is_none());
 
                 // A failure stays on screen, in the dialog, with Retry.
-                page.login = Some(waiting(HarnessId::Codex, 2));
+                page.login = Some(waiting(HarnessId::Pi, 2));
                 assert!(page.apply_poll(
                     2,
                     Ok(poll(
@@ -2502,13 +2232,13 @@ mod tests {
                     }
                 );
                 // So does a lost poll or a start that never got going.
-                page.login = Some(waiting(HarnessId::Cursor, 3));
+                page.login = Some(waiting(HarnessId::Pi, 3));
                 assert!(page.apply_poll(3, Err("engine gone".into()), cx));
                 assert!(matches!(
                     &page.login.as_ref().unwrap().step,
                     LoginStep::Failed { message } if message.contains("engine gone")
                 ));
-                page.login = Some(waiting(HarnessId::ClaudeCode, 4));
+                page.login = Some(waiting(HarnessId::Pi, 4));
                 page.apply_start(4, Err("no network".into()), cx);
                 assert!(matches!(
                     &page.login.as_ref().unwrap().step,
@@ -2531,11 +2261,11 @@ mod tests {
         let window = page(cx);
         let row = |id: &str, email: &str, active, switchable| AgentAccount {
             id: id.into(),
-            harness: HarnessId::Opencode,
+            harness: HarnessId::Pi,
             email: Some(email.into()),
             plan_label: Some("ChatGPT Plus".into()),
             active,
-            usage_windows: vec![zeron_proto::AgentUsageWindow {
+            usage_windows: vec![paku_proto::AgentUsageWindow {
                 label: "Session".into(),
                 used_fraction: 0.4,
                 resets_at: None,
@@ -2547,38 +2277,38 @@ mod tests {
             auth_kind: None,
             switchable,
             saved_at: None,
-            provider: Some("openai".into()),
+            provider: Some("openai-codex".into()),
         };
         window
             .update(cx, |page, _, cx| {
-                page.set_embedded_harness(HarnessId::Opencode, cx);
+                page.set_embedded_harness(HarnessId::Pi, cx);
                 page.snapshot = Loadable::Ready(AgentAccountsSnapshot {
                     accounts: vec![
                         row("a", "a@example.com", true, true),
                         row("b", "b@example.com", false, true),
                         AgentAccount {
                             usage_windows: vec![],
-                            provider: Some("github-copilot".into()),
-                            ..row("c", "GitHub account", true, false)
+                            provider: Some("anthropic".into()),
+                            ..row("c", "Anthropic account", true, false)
                         },
                     ],
                     warnings: vec![],
                 });
                 page.login = Some(LoginFlow {
-                    provider: Some("github-copilot"),
-                    url: Some("https://github.com/login/device".into()),
+                    provider: Some("openai-codex"),
+                    url: Some("https://auth.openai.com/authorize".into()),
                     step: LoginStep::Browser {
-                        message: Some("Enter the code ABCD-1234 on GitHub.".into()),
+                        message: Some("Finish signing in to ChatGPT.".into()),
                     },
-                    ..waiting(HarnessId::Opencode, 1)
+                    ..waiting(HarnessId::Pi, 1)
                 });
                 assert_eq!(
                     page.login.as_ref().unwrap().status().as_ref(),
-                    "Enter the code ABCD-1234 on GitHub."
+                    "Finish signing in to ChatGPT."
                 );
                 assert_eq!(
                     page.login.as_ref().unwrap().title(),
-                    "Sign in to GitHub Copilot for OpenCode"
+                    "Sign in to ChatGPT for Pi"
                 );
             })
             .unwrap();
@@ -2587,34 +2317,28 @@ mod tests {
     }
 
     #[gpui::test]
-    fn claudes_paste_fallback_joins_the_same_dialog(cx: &mut gpui::TestAppContext) {
+    fn pi_browser_sign_in_joins_the_accounts_dialog(cx: &mut gpui::TestAppContext) {
         let window = page(cx);
         window
             .update(cx, |page, _, cx| {
                 page.login = Some(LoginFlow {
                     login_id: None,
-                    ..waiting(HarnessId::ClaudeCode, 1)
+                    ..waiting(HarnessId::Pi, 1)
                 });
                 page.apply_start(
                     1,
                     Ok(AgentLoginStart {
                         login_id: "login-1".into(),
-                        url: "https://claude.ai/oauth/authorize?code=true".into(),
-                        mode: AgentLoginMode::PasteCode,
+                        url: "https://auth.openai.com/authorize".into(),
+                        mode: paku_proto::AgentLoginMode::Browser,
                         callback_port: None,
                     }),
                     cx,
                 );
                 let flow = page.login.as_ref().unwrap();
-                assert_eq!(flow.title(), "Sign in to Claude Code");
+                assert_eq!(flow.title(), "Sign in to Pi");
                 assert_eq!(flow.login_id.as_deref(), Some("login-1"));
-                assert_eq!(
-                    flow.step,
-                    LoginStep::PasteCode {
-                        submitting: false,
-                        error: None
-                    }
-                );
+                assert_eq!(flow.step, LoginStep::Browser { message: None });
             })
             .unwrap();
         cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear())
@@ -2641,20 +2365,19 @@ mod tests {
         };
         let snapshot = AgentAccountsSnapshot {
             accounts: vec![
-                account("c1", HarnessId::ClaudeCode, false),
-                account("x1", HarnessId::Codex, false),
-                account("c2", HarnessId::ClaudeCode, true),
+                account("p1", HarnessId::Pi, false),
+                account("m1", HarnessId::Mock, false),
+                account("p2", HarnessId::Pi, true),
             ],
             warnings: vec![],
         };
-        let claude = provider_accounts(&snapshot, HarnessId::ClaudeCode);
-        let ids: Vec<&str> = claude.iter().map(|a| a.id.as_str()).collect();
+        let pi = provider_accounts(&snapshot, HarnessId::Pi);
+        let ids: Vec<&str> = pi.iter().map(|a| a.id.as_str()).collect();
         assert_eq!(
             ids,
-            ["c1", "c2"],
+            ["p1", "p2"],
             "engine (creation) order holds — switching must not move a card"
         );
-        assert_eq!(provider_accounts(&snapshot, HarnessId::Codex).len(), 1);
-        assert!(provider_accounts(&snapshot, HarnessId::Cursor).is_empty());
+        assert_eq!(provider_accounts(&snapshot, HarnessId::Mock).len(), 1);
     }
 }

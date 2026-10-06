@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   upload:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && vars.PAKU_TESTFLIGHT_ENABLED == 'true'
     runs-on: macos-latest
     # Cold Rust core build (release profile, thin LTO) + archive + processing.
     timeout-minutes: 90
@@ -31,6 +31,8 @@ jobs:
       AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
       AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
       AUDIENCE: ${{ inputs.audience || 'internal' }}
+      APPLE_TEAM_ID: ${{ vars.PAKU_APPLE_TEAM_ID }}
+      APPLE_BUNDLE_ID: ${{ vars.PAKU_APPLE_BUNDLE_ID }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -38,7 +40,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for name in AC_API_KEY_P8 AC_API_KEY_ID AC_API_ISSUER_ID; do
+          for name in AC_API_KEY_P8 AC_API_KEY_ID AC_API_ISSUER_ID APPLE_TEAM_ID APPLE_BUNDLE_ID; do
             if [ -z "${!name:-}" ]; then
               echo "Required repository secret $name is not configured." >&2
               exit 2
@@ -77,10 +79,10 @@ jobs:
           }
 
           apps="$RUNNER_TEMP/apps.json"
-          api 'https://api.appstoreconnect.apple.com/v1/apps?filter[bundleId]=sh.zeron.ios&fields[apps]=name,bundleId&limit=10' > "$apps"
+          api "https://api.appstoreconnect.apple.com/v1/apps?filter[bundleId]=$APPLE_BUNDLE_ID&fields[apps]=name,bundleId&limit=10" > "$apps"
           app_count="$(jq '.data | length' "$apps")"
           if [ "$app_count" -ne 1 ]; then
-            echo "Expected exactly one App Store Connect app for sh.zeron.ios; found $app_count." >&2
+            echo "Expected exactly one App Store Connect app for $APPLE_BUNDLE_ID; found $app_count." >&2
             exit 3
           fi
           app_id="$(jq -r '.data[0].id' "$apps")"
@@ -96,23 +98,23 @@ jobs:
           # fails with a clear provisioning error.
           asc() { curl --globoff --silent --show-error -o "$1" -w '%{http_code}' -H "Authorization: Bearer $token" -H 'Content-Type: application/json' "${@:2}"; }
           bundle_ids="$RUNNER_TEMP/bundle-ids.json"
-          status="$(asc "$bundle_ids" 'https://api.appstoreconnect.apple.com/v1/bundleIds?filter[identifier]=sh.zeron.ios')"
-          bundle_id="$(jq -r '[.data[]? | select(.attributes.identifier == "sh.zeron.ios")][0].id // empty' "$bundle_ids" 2>/dev/null || true)"
+          status="$(asc "$bundle_ids" "https://api.appstoreconnect.apple.com/v1/bundleIds?filter[identifier]=$APPLE_BUNDLE_ID")"
+          bundle_id="$(jq -r --arg identifier "$APPLE_BUNDLE_ID" '[.data[]? | select(.attributes.identifier == $identifier)][0].id // empty' "$bundle_ids" 2>/dev/null || true)"
           if [ "$status" != 200 ] || [ -z "$bundle_id" ]; then
-            echo "::warning::Couldn't look up the sh.zeron.ios App ID ($status): $(cat "$bundle_ids")"
+            echo "::warning::Couldn't look up the $APPLE_BUNDLE_ID App ID ($status): $(cat "$bundle_ids")"
           else
             caps="$RUNNER_TEMP/capabilities.json"
             status="$(asc "$caps" "https://api.appstoreconnect.apple.com/v1/bundleIds/$bundle_id/bundleIdCapabilities")"
             if [ "$status" != 200 ]; then
               echo "::warning::Couldn't read the App ID's capabilities ($status): $(cat "$caps")"
             elif jq -e '.data[] | select(.attributes.capabilityType == "PUSH_NOTIFICATIONS")' "$caps" > /dev/null; then
-              echo "Push Notifications already enabled on sh.zeron.ios."
+              echo "Push Notifications already enabled on $APPLE_BUNDLE_ID."
             else
               created="$RUNNER_TEMP/capability.json"
               status="$(asc "$created" -X POST 'https://api.appstoreconnect.apple.com/v1/bundleIdCapabilities' \
                 --data "$(jq -n --arg id "$bundle_id" '{data: {type: "bundleIdCapabilities", attributes: {capabilityType: "PUSH_NOTIFICATIONS"}, relationships: {bundleId: {data: {type: "bundleIds", id: $id}}}}}')")"
               if [ "$status" = 201 ]; then
-                echo "Enabled Push Notifications on sh.zeron.ios."
+                echo "Enabled Push Notifications on $APPLE_BUNDLE_ID."
               else
                 echo "::warning::Couldn't enable Push Notifications ($status): $(cat "$created")"
               fi
@@ -148,20 +150,21 @@ jobs:
           # certificate limit. The export below signs for distribution with
           # the cloud-managed certificate instead; entitlements are put on
           # the archived app in the next step.
-          xcodebuild -project Zeron.xcodeproj -scheme Zeron \
+          xcodebuild -project Paku.xcodeproj -scheme Paku \
             -configuration Release -destination 'generic/platform=iOS' \
-            -archivePath "$RUNNER_TEMP/Zeron.xcarchive" archive \
+            -archivePath "$RUNNER_TEMP/Paku.xcarchive" archive \
             CODE_SIGNING_ALLOWED=NO \
-            CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            PRODUCT_BUNDLE_IDENTIFIER="$APPLE_BUNDLE_ID" DEVELOPMENT_TEAM="$APPLE_TEAM_ID"
 
       - name: Entitlements for export
         run: |
           # An unsigned archive carries no entitlements, and export re-signs
-          # with the ones it finds: ad-hoc sign the app with Zeron.entitlements
+          # with the ones it finds: ad-hoc sign the app with Paku.entitlements
           # (push) so the distribution signature keeps them (aps-environment
           # becomes production from the App Store profile).
-          app="$RUNNER_TEMP/Zeron.xcarchive/Products/Applications/Zeron.app"
-          codesign --force --sign - --entitlements apps/ios/Zeron.entitlements "$app"
+          app="$RUNNER_TEMP/Paku.xcarchive/Products/Applications/Paku.app"
+          codesign --force --sign - --entitlements apps/ios/Paku.entitlements "$app"
           codesign -d --entitlements :- "$app" | grep -q aps-environment
 
       - name: Upload to TestFlight
@@ -171,13 +174,13 @@ jobs:
           plutil -insert method -string app-store-connect "$options"
           plutil -insert destination -string upload "$options"
           plutil -insert signingStyle -string automatic "$options"
-          plutil -insert teamID -string 5XY3M483YQ "$options"
+          plutil -insert teamID -string "$APPLE_TEAM_ID" "$options"
           plutil -insert manageAppVersionAndBuildNumber -bool false "$options"
           if [ "$AUDIENCE" = "internal" ]; then
             plutil -insert testFlightInternalTestingOnly -bool true "$options"
           fi
           xcodebuild -exportArchive \
-            -archivePath "$RUNNER_TEMP/Zeron.xcarchive" \
+            -archivePath "$RUNNER_TEMP/Paku.xcarchive" \
             -exportPath "$RUNNER_TEMP/TestFlightExport" \
             -exportOptionsPlist "$options" \
             -allowProvisioningUpdates \

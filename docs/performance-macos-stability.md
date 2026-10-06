@@ -1,5 +1,7 @@
 # macOS streaming stability follow-up
 
+> Historical upstream **Zeron** evidence, not Paku verification. Recorded revisions, paths and hashes are preserved; reproduction commands apply only to those upstream revisions. Current Paku verification: `scripts/verify-paku.sh`.
+
 For the v0.2.43 follow-up, production-history idle measurements, and standalone
 reproduction of the transient Metal driver charge, see
 [idle presence and memory attribution](performance-idle-presence.md).

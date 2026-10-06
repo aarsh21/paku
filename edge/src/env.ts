@@ -26,29 +26,29 @@ export interface Env {
    * key id. Unset ⇒ session notifications are decided and logged, not sent. */
   APNS_KEY_P8?: string;
   APNS_KEY_ID?: string;
-  /** Apple team id and the app's bundle id (defaults: the Zeron iOS app). */
+  /** Operator-owned Apple team ID and app bundle ID; required for APNs. */
   APNS_TEAM_ID?: string;
   APNS_TOPIC?: string;
 }
 
 /** APNs settings, when push is set up for this deployment. */
 export const apnsConfig = (env: Env) =>
-  env.APNS_KEY_P8 && env.APNS_KEY_ID
+  env.APNS_KEY_P8 && env.APNS_KEY_ID && env.APNS_TEAM_ID && env.APNS_TOPIC
     ? {
         keyP8: env.APNS_KEY_P8,
         keyId: env.APNS_KEY_ID,
-        teamId: env.APNS_TEAM_ID ?? "5XY3M483YQ",
-        topic: env.APNS_TOPIC ?? "sh.zeron.ios"
+        teamId: env.APNS_TEAM_ID,
+        topic: env.APNS_TOPIC
       }
     : undefined;
 
 /** Header the Worker stamps on requests it forwards into DOs after verifying
  * the caller's JWT. DOs trust it blindly — they are only reachable through
  * the Worker (design §2: "DO never sees an unauthenticated frame"). */
-export const AUTH_USER_HEADER = "x-zeron-auth-user";
+export const AUTH_USER_HEADER = "x-paku-auth-user";
 
 /** Header the Worker stamps on requests forwarded into workspace-doc rooms
  * (`ws/{orgId}`). Membership (JWT org claim == orgId) is enforced at the
  * Worker; the SessionRoom DO sees this and skips its per-chat
  * claim-on-first-join ownership discipline for the room. */
-export const ROOM_KIND_HEADER = "x-zeron-room-kind";
+export const ROOM_KIND_HEADER = "x-paku-room-kind";

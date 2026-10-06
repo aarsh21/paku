@@ -1,5 +1,7 @@
 # Resource profiling, 2026-09-05
 
+> Historical **Zeron** measurements, preserved with their original executable paths, hashes and revisions. These are not Paku test results. Reproduction commands below require the recorded upstream revisions, including now-removed harnesses and replay scripts. For current Paku verification use `scripts/verify-paku.sh`; new measurements use `scripts/resource-profile.mjs` (Pi or explicit Mock, not replay).
+
 For the subsequent native macOS work and its validation limits, see
 [Native macOS resource follow-up](performance-macos.md).
 

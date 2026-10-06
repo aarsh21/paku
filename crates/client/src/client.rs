@@ -6,9 +6,9 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
+use paku_doc::RegistryDoc;
+use paku_proto::{Chat, ChatConfig, SidebarPinChange, SidebarSectionChange};
 use tokio_util::sync::CancellationToken;
-use zeron_doc::RegistryDoc;
-use zeron_proto::{Chat, ChatConfig, SidebarPinChange, SidebarSectionChange};
 
 use crate::attachments::{self, AttachmentCache};
 use crate::auth::TokenProvider;
@@ -280,7 +280,7 @@ impl ClientInner {
 
     pub(crate) fn registry_write<R>(
         self: &Arc<Self>,
-        f: impl FnOnce(&mut RegistryDoc) -> std::result::Result<R, zeron_doc::DocError>,
+        f: impl FnOnce(&mut RegistryDoc) -> std::result::Result<R, paku_doc::DocError>,
     ) -> Result<R> {
         let result = self.workspace.mutate(f)?;
         self.after_registry_write();
@@ -410,7 +410,7 @@ impl ClientInner {
             queued_attachments: device
                 .version
                 .as_deref()
-                .and_then(zeron_proto::version_triple)
+                .and_then(paku_proto::version_triple)
                 .is_some_and(|v| v >= QUEUED_ATTACHMENTS_MIN),
             mid_turn_steering,
         }
@@ -768,7 +768,7 @@ impl Client {
     fn chat_write(
         &self,
         chat_id: &str,
-        f: impl FnOnce(&mut RegistryDoc) -> std::result::Result<bool, zeron_doc::DocError>,
+        f: impl FnOnce(&mut RegistryDoc) -> std::result::Result<bool, paku_doc::DocError>,
     ) -> Result<()> {
         if self.inner.registry_write(f)? {
             Ok(())
@@ -945,7 +945,7 @@ impl Client {
         {
             return Ok(existing.id.clone());
         }
-        let space = zeron_proto::Space {
+        let space = paku_proto::Space {
             id: crate::new_id(),
             device_id: device_id.to_owned(),
             path: path.to_owned(),
@@ -965,7 +965,7 @@ impl Client {
                 .relay
                 .call(
                     device_id,
-                    zeron_rpc::methods::MUTATE,
+                    paku_rpc::methods::MUTATE,
                     serde_json::json!({
                         "op": "createSpace",
                         "spaceId": id,
@@ -1097,7 +1097,7 @@ impl Client {
                     .relay
                     .call(
                         device_id,
-                        zeron_rpc::methods::LIST_HARNESSES,
+                        paku_rpc::methods::LIST_HARNESSES,
                         serde_json::json!({}),
                     )
                     .await
@@ -1108,7 +1108,7 @@ impl Client {
                 match reply {
                     Ok(list) => {
                         let list: Vec<HarnessInfo> =
-                            list.into_iter().filter(|h| h.id != "mock").collect();
+                            list.into_iter().filter(|h| h.id == "pi").collect();
                         cache.put_harnesses(device_id, &list);
                         list
                     }
@@ -1132,6 +1132,10 @@ impl Client {
     /// Model catalog for `harness` on `device_id` (normalized live reply,
     /// else the cached one, else the curated static list).
     pub async fn list_models(&self, device_id: &str, harness: &str) -> Vec<ModelInfo> {
+        if harness != "pi" {
+            tracing::debug!(harness, "unsupported production harness");
+            return Vec::new();
+        }
         match self.inner.backend() {
             Backend::Demo(demo) => demo.list_models(harness).await,
             Backend::Live(live) => {
@@ -1140,7 +1144,7 @@ impl Client {
                     .relay
                     .call(
                         device_id,
-                        zeron_rpc::methods::LIST_MODELS,
+                        paku_rpc::methods::LIST_MODELS,
                         serde_json::json!({ "harness": harness }),
                     )
                     .await
@@ -1179,7 +1183,9 @@ impl Client {
         environment: &str,
         prefs: PushPrefs,
     ) -> Result<()> {
-        let Some(live) = self.inner.live() else { return Ok(()) };
+        let Some(live) = self.inner.live() else {
+            return Ok(());
+        };
         let url = crate::live::urls::registry_push_target(
             &live.edge,
             self.inner.credentials.org_id(),
@@ -1199,14 +1205,19 @@ impl Client {
             .await
             .map_err(|e| ClientError::Network(e.to_string()))?;
         if !response.status().is_success() {
-            return Err(ClientError::HostError(format!("push registration http {}", response.status())));
+            return Err(ClientError::HostError(format!(
+                "push registration http {}",
+                response.status()
+            )));
         }
         Ok(())
     }
 
     /// Stop notifications to this device (sign-out, turned off).
     pub async fn unregister_push_target(&self) -> Result<()> {
-        let Some(live) = self.inner.live() else { return Ok(()) };
+        let Some(live) = self.inner.live() else {
+            return Ok(());
+        };
         let url = crate::live::urls::registry_push_target(
             &live.edge,
             self.inner.credentials.org_id(),
@@ -1220,7 +1231,10 @@ impl Client {
             .await
             .map_err(|e| ClientError::Network(e.to_string()))?;
         if !response.status().is_success() {
-            return Err(ClientError::HostError(format!("push removal http {}", response.status())));
+            return Err(ClientError::HostError(format!(
+                "push removal http {}",
+                response.status()
+            )));
         }
         Ok(())
     }
@@ -1233,7 +1247,7 @@ impl Client {
                     .relay
                     .call(
                         device_id,
-                        zeron_rpc::methods::LIST_REFS,
+                        paku_rpc::methods::LIST_REFS,
                         serde_json::json!({ "repoPath": repo_path }),
                     )
                     .await?;
@@ -1250,7 +1264,7 @@ impl Client {
         chat_id: Option<String>,
         space_id: Option<String>,
         query: &str,
-    ) -> Result<Vec<zeron_proto::FileSearchMatch>> {
+    ) -> Result<Vec<paku_proto::FileSearchMatch>> {
         match self.inner.backend() {
             Backend::Demo(_) => {
                 const FILES: &[&str] = &[
@@ -1260,8 +1274,8 @@ impl Client {
                     "crates/text/src/layout.rs",
                     "crates/text/src/prepare.rs",
                     "crates/markdown/src/parser.rs",
-                    "apps/ios/Zeron/Transcript/TranscriptListView.swift",
-                    "apps/ios/Zeron/Composer/ComposerBar.swift",
+                    "apps/ios/Paku/Transcript/TranscriptListView.swift",
+                    "apps/ios/Paku/Composer/ComposerBar.swift",
                     "docs/mobile-rewrite.md",
                     "README.md",
                 ];
@@ -1269,7 +1283,7 @@ impl Client {
                 Ok(FILES
                     .iter()
                     .filter(|p| q.is_empty() || p.to_lowercase().contains(&q))
-                    .map(|p| zeron_proto::FileSearchMatch {
+                    .map(|p| paku_proto::FileSearchMatch {
                         path: (*p).to_owned(),
                         is_dir: false,
                     })
@@ -1280,7 +1294,7 @@ impl Client {
                     .relay
                     .call(
                         device_id,
-                        zeron_rpc::methods::SEARCH_FILES,
+                        paku_rpc::methods::SEARCH_FILES,
                         serde_json::json!({ "query": query, "chatId": chat_id, "spaceId": space_id }),
                     )
                     .await?;
@@ -1304,7 +1318,7 @@ impl Client {
                 };
                 let value = live
                     .relay
-                    .call(device_id, zeron_rpc::methods::LIST_FOLDERS, params)
+                    .call(device_id, paku_rpc::methods::LIST_FOLDERS, params)
                     .await?;
                 serde_json::from_value(value).map_err(|e| ClientError::HostError(e.to_string()))
             }
@@ -1319,7 +1333,7 @@ impl Client {
                 .relay
                 .call(
                     device_id,
-                    zeron_rpc::methods::SWITCH_REF,
+                    paku_rpc::methods::SWITCH_REF,
                     serde_json::json!({ "repoPath": repo_path, "refName": ref_name }),
                 )
                 .await
@@ -1344,7 +1358,7 @@ impl Client {
                 }
                 let value = live
                     .relay
-                    .call(device_id, zeron_rpc::methods::CREATE_WORKTREE, params)
+                    .call(device_id, paku_rpc::methods::CREATE_WORKTREE, params)
                     .await?;
                 value
                     .get("path")
@@ -1411,8 +1425,8 @@ impl Client {
     pub fn set_network_online(&self, online: bool) {
         let was = self.inner.path_online.swap(online, Ordering::AcqRel);
         if !self.inner.is_demo() {
-            // Parks/un-parks every sync backoff in the process (zeron-sync).
-            zeron_sync::wake::set_path_online(online);
+            // Parks/un-parks every sync backoff in the process (paku-sync).
+            paku_sync::wake::set_path_online(online);
         }
         if was != online {
             self.inner.recompute_connectivity();

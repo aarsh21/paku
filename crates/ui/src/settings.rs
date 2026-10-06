@@ -1,5 +1,5 @@
 //! UI settings persisted to a small JSON file in the data dir — pane widths and
-//! collapse flags (zeron persisted the same set in localStorage).
+//! collapse flags (paku persisted the same set in localStorage).
 //!
 //! Loaded once at boot and then owned by [`SettingsStore`], the only production
 //! writer. Frequent geometry changes are debounced; durable choices flush
@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gpui::{App, Global, Task};
+use paku_proto::{AuthState, WorkspaceScope};
 use serde::{Deserialize, Serialize};
-use zeron_proto::{AuthState, WorkspaceScope};
 
 pub mod accounts;
 pub mod appearance;
@@ -68,7 +68,7 @@ const NEW_THREAD_BACKGROUND_DIR: &str = "new-thread-backgrounds";
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewThreadComposerBackground {
-    /// Managed copy inside Zeron's device-local data directory.
+    /// Managed copy inside Paku's device-local data directory.
     pub path: String,
     /// Original file name shown in Appearance settings.
     pub name: String,
@@ -350,13 +350,22 @@ pub fn current(cx: &App) -> UiSettings {
         .unwrap_or_default()
 }
 
+/// Read whole-interface zoom without cloning the settings on every window observation.
+pub fn ui_scale(cx: &App) -> f32 {
+    crate::ui_scale::normalize(
+        cx.try_global::<SettingsStore>()
+            .map(|store| store.current.ui_scale)
+            .unwrap_or(crate::ui_scale::DEFAULT),
+    )
+}
+
 /// Read the picker preference without cloning the full settings for each model row.
 pub fn compact_model_picker(cx: &App) -> bool {
     cx.try_global::<SettingsStore>()
         .is_some_and(|store| store.current.compact_model_picker)
 }
 
-/// Copy a selected image into Zeron's device-local data directory and make it
+/// Copy a selected image into Paku's device-local data directory and make it
 /// the new-thread canvas background. A unique file name avoids stale image
 /// caches when the background is replaced.
 pub fn install_new_thread_composer_background(source: &Path, cx: &mut App) -> Result<(), String> {
@@ -374,13 +383,13 @@ pub fn install_new_thread_composer_background(source: &Path, cx: &mut App) -> Re
 fn install_staged_background(
     source: &Path,
     staged: crate::attachments::StagedAttachment,
-    color: Option<zeron_theme::Color>,
+    color: Option<paku_theme::Color>,
     cx: &mut App,
 ) -> Result<(), String> {
     let data_dir = cx
         .try_global::<SettingsStore>()
         .map(|store| store.data_dir.clone())
-        .ok_or_else(|| "Unable to save the image. Restart Zeron and try again.".to_string())?;
+        .ok_or_else(|| "Unable to save the image. Restart Paku and try again.".to_string())?;
     let prepared = prepare_background_file(staged, &data_dir)?;
     commit_background(source, prepared, color, cx)
 }
@@ -443,13 +452,13 @@ fn prepare_background_file(
 fn commit_background(
     source: &Path,
     mut prepared: PreparedBackgroundFile,
-    color: Option<zeron_theme::Color>,
+    color: Option<paku_theme::Color>,
     cx: &mut App,
 ) -> Result<(), String> {
     let data_dir = cx
         .try_global::<SettingsStore>()
         .map(|store| store.data_dir.clone())
-        .ok_or_else(|| "Unable to save the image. Restart Zeron and try again.".to_string())?;
+        .ok_or_else(|| "Unable to save the image. Restart Paku and try again.".to_string())?;
     let backgrounds_dir = data_dir.join(NEW_THREAD_BACKGROUND_DIR);
     let replacement = prepared.0.as_ref().unwrap().clone();
     let mut next = current(cx);
@@ -484,7 +493,7 @@ pub fn remove_new_thread_composer_background(cx: &mut App) -> Result<(), String>
     let data_dir = cx
         .try_global::<SettingsStore>()
         .map(|store| store.data_dir.clone())
-        .ok_or_else(|| "Unable to remove the image. Restart Zeron and try again.".to_string())?;
+        .ok_or_else(|| "Unable to remove the image. Restart Paku and try again.".to_string())?;
     let mut next = current(cx);
     let previous = next.new_thread_composer_background.take();
     next.wallpaper_source = None;
@@ -764,7 +773,7 @@ pub struct SkillCompletionSettings {
 impl SkillCompletionSettings {
     /// Every harness defaults to `$` skills kept out of the `/` menu; an
     /// explicit per-harness choice (or the legacy slash-menu flag) wins.
-    pub fn for_harness(_harness: zeron_proto::HarnessId) -> Self {
+    pub fn for_harness(_harness: paku_proto::HarnessId) -> Self {
         Self {
             dollar: true,
             separate_from_slash: true,
@@ -772,23 +781,14 @@ impl SkillCompletionSettings {
     }
 }
 
-pub const SKILL_COMPLETION_HARNESSES: [(zeron_proto::HarnessId, &str); 9] = [
-    (zeron_proto::HarnessId::Antigravity, "Antigravity"),
-    (zeron_proto::HarnessId::ClaudeCode, "Claude Code"),
-    (zeron_proto::HarnessId::Codex, "Codex"),
-    (zeron_proto::HarnessId::Cursor, "Cursor"),
-    (zeron_proto::HarnessId::Devin, "Devin"),
-    (zeron_proto::HarnessId::Grok, "Grok"),
-    (zeron_proto::HarnessId::Hermes, "Hermes"),
-    (zeron_proto::HarnessId::Pi, "Pi"),
-    (zeron_proto::HarnessId::Opencode, "OpenCode"),
-];
+pub const SKILL_COMPLETION_HARNESSES: [(paku_proto::HarnessId, &str); 1] =
+    [(paku_proto::HarnessId::Pi, "Pi")];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UiSettings {
     pub dictation_enabled: bool,
-    /// Dictation microphone as a `zeron_voice::InputDevice` id; `None`
+    /// Dictation microphone as a `paku_voice::InputDevice` id; `None`
     /// follows the system default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dictation_input: Option<String>,
@@ -799,7 +799,7 @@ pub struct UiSettings {
     /// Legacy global opt-in; per-harness preferences take precedence.
     pub skills_in_slash_menu: bool,
     pub skill_completion_by_harness:
-        std::collections::HashMap<zeron_proto::HarnessId, SkillCompletionSettings>,
+        std::collections::HashMap<paku_proto::HarnessId, SkillCompletionSettings>,
     /// Open model selection with an effort slider and a separate model list.
     pub compact_model_picker: bool,
     pub sidebar_width: f32,
@@ -853,7 +853,7 @@ pub struct UiSettings {
     /// list. Kept for file compatibility; no longer read.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub space_order: Vec<String>,
-    /// Master switch for session notification chimes. `ZERON_DISABLE_SOUND`
+    /// Master switch for session notification chimes. `PAKU_DISABLE_SOUND`
     /// overrides every per-event preference below.
     pub sound_enabled: bool,
     /// Chime when an agent run completes successfully.
@@ -863,9 +863,9 @@ pub struct UiSettings {
     /// Chime when a run fails or the durable connection state degrades.
     pub sound_attention_enabled: bool,
     /// Desktop banner notifications on the same transitions.
-    /// `ZERON_DISABLE_NOTIFICATIONS` overrides.
+    /// `PAKU_DISABLE_NOTIFICATIONS` overrides.
     pub notifications_enabled: bool,
-    /// Suppress the banner while a Zeron window is focused (the chime covers
+    /// Suppress the banner while a Paku window is focused (the chime covers
     /// the foreground case).
     pub notifications_background_only: bool,
     pub files_panel_width: f32,
@@ -874,7 +874,7 @@ pub struct UiSettings {
     pub agent_update_notifications: bool,
     pub right_pane_width: f32,
     /// Legacy: panel *open* flags are session-scoped in-memory state now
-    /// (`shell::SessionPanels`, zeron `sessionPanels` parity). Kept for file
+    /// (`shell::SessionPanels`, paku `sessionPanels` parity). Kept for file
     /// compatibility; no longer read or written by the shell.
     pub right_pane_open: bool,
     pub terminal_height: f32,
@@ -911,6 +911,12 @@ pub struct UiSettings {
     pub ui_font_family: crate::typography::UiFontFamily,
     /// Base size for interface and conversational prose.
     pub ui_font_size: crate::typography::UiFontSize,
+    /// Whole-interface zoom; independent of every font-size preference.
+    #[serde(
+        deserialize_with = "crate::ui_scale::deserialize",
+        serialize_with = "crate::ui_scale::serialize"
+    )]
+    pub ui_scale: f32,
     /// Terminal family and absolute pixel size. Only fixed-width families
     /// qualify, including compatible Nerd Fonts.
     pub terminal_font_family: crate::typography::UiFontFamily,
@@ -919,7 +925,7 @@ pub struct UiSettings {
     pub code_font_family: crate::typography::UiFontFamily,
     pub code_font_size: f32,
     /// Independently selected light and dark theme variants.
-    pub theme_selection: zeron_theme::ThemeSelection,
+    pub theme_selection: paku_theme::ThemeSelection,
     /// Changes pane: side-by-side diffs instead of the unified stack.
     pub diff_split: bool,
     /// Changes pane: wrap long source lines instead of scrolling horizontally.
@@ -932,7 +938,7 @@ pub struct UiSettings {
     pub transcript_width: f32,
     /// Open a normal web-link activation in the session Browser. Explicit
     /// context-menu actions remain available regardless of this preference.
-    pub open_web_links_in_zeron: bool,
+    pub open_web_links_in_paku: bool,
     /// Compact transcript: a turn's working steps (thinking, tool calls, and
     /// the narration between them) fold into one collapsed accordion, so only
     /// the reply text stays visible.
@@ -946,9 +952,9 @@ pub struct UiSettings {
     /// Include hidden and ignored entries in workspace file trees.
     pub files_show_all: bool,
     /// Interactive identity overlay; imported themes default to their own accent.
-    pub accent: zeron_theme::AccentSelection,
+    pub accent: paku_theme::AccentSelection,
     /// Glass policy, independent from the selected appearance, theme, and accent.
-    pub surface: zeron_theme::SurfacePreference,
+    pub surface: paku_theme::SurfacePreference,
     /// Optional device-local artwork behind the blank new-thread composer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub new_thread_composer_background: Option<NewThreadComposerBackground>,
@@ -958,7 +964,7 @@ pub struct UiSettings {
     /// Most recently displayed sources first; bounded by the shuffle cooldown.
     pub wallpaper_history: Vec<PathBuf>,
     pub wallpaper_theme_colors: bool,
-    pub wallpaper_color: Option<zeron_theme::Color>,
+    pub wallpaper_color: Option<paku_theme::Color>,
     /// Non-destructive treatment composited inside the artwork's fade mask.
     pub new_thread_background_effect: NewThreadBackgroundEffect,
     /// Snap animations to rest. Defaults to following the OS.
@@ -1026,23 +1032,24 @@ impl Default for UiSettings {
             git_history_author_display: GitHistoryAuthorDisplay::default(),
             ui_font_family: crate::typography::UiFontFamily::default(),
             ui_font_size: crate::typography::UiFontSize::default(),
+            ui_scale: crate::ui_scale::DEFAULT,
             terminal_font_family: crate::typography::UiFontFamily::GeistMono,
             terminal_font_size: crate::typography::TERMINAL_FONT_SIZE_DEFAULT,
             code_font_family: crate::typography::UiFontFamily::GeistMono,
             code_font_size: crate::typography::CODE_FONT_SIZE_DEFAULT,
-            theme_selection: zeron_theme::ThemeSelection::default(),
+            theme_selection: paku_theme::ThemeSelection::default(),
             diff_split: false,
             diff_wrap: false,
             code_fences_fit_content: false,
             transcript_width: TRANSCRIPT_WIDTH_DEFAULT,
-            open_web_links_in_zeron: true,
+            open_web_links_in_paku: true,
             transcript_compact_mode: false,
             files_autosave_enabled: false,
             files_autosave_delay_ms: FILES_AUTOSAVE_DELAY_DEFAULT_MS,
             files_word_wrap: false,
             files_show_all: false,
-            accent: zeron_theme::AccentSelection::default(),
-            surface: zeron_theme::SurfacePreference::default(),
+            accent: paku_theme::AccentSelection::default(),
+            surface: paku_theme::SurfacePreference::default(),
             new_thread_composer_background: None,
             wallpaper_folder: None,
             wallpaper_source: None,
@@ -1089,6 +1096,9 @@ pub enum ShortcutId {
     ToggleDictation,
     CaptureAppshot,
     RandomWallpaper,
+    IncreaseInterfaceScale,
+    DecreaseInterfaceScale,
+    ResetInterfaceScale,
     SaveFile,
     BrowserReload,
     ToggleSidebar,
@@ -1105,10 +1115,13 @@ pub enum ShortcutId {
 }
 
 impl ShortcutId {
-    pub const ALL: [ShortcutId; 15 + JUMP_SLOTS] = [
+    pub const ALL: [ShortcutId; 18 + JUMP_SLOTS] = [
         ShortcutId::ToggleDictation,
         ShortcutId::CaptureAppshot,
         ShortcutId::RandomWallpaper,
+        ShortcutId::IncreaseInterfaceScale,
+        ShortcutId::DecreaseInterfaceScale,
+        ShortcutId::ResetInterfaceScale,
         ShortcutId::SaveFile,
         ShortcutId::BrowserReload,
         ShortcutId::ToggleSidebar,
@@ -1136,11 +1149,14 @@ impl ShortcutId {
         self != Self::CaptureAppshot || crate::appshots::is_desktop()
     }
 
-    /// Row label (zeron lib/shortcuts.ts `SHORTCUT_DEFINITIONS`, verbatim).
+    /// Row label (paku lib/shortcuts.ts `SHORTCUT_DEFINITIONS`, verbatim).
     pub fn label(self) -> &'static str {
         match self {
             ShortcutId::ToggleDictation => "Hold to dictate",
             ShortcutId::RandomWallpaper => "Random wallpaper",
+            ShortcutId::IncreaseInterfaceScale => "Increase interface scale",
+            ShortcutId::DecreaseInterfaceScale => "Decrease interface scale",
+            ShortcutId::ResetInterfaceScale => "Reset interface scale to 100%",
             ShortcutId::CaptureAppshot => "Capture Appshot",
             ShortcutId::SaveFile => "Save file",
             ShortcutId::BrowserReload => "Reload browser page",
@@ -1169,6 +1185,9 @@ impl ShortcutId {
         match self {
             ShortcutId::ToggleDictation => "mod-d",
             ShortcutId::RandomWallpaper => "mod-u",
+            ShortcutId::IncreaseInterfaceScale => "mod-+",
+            ShortcutId::DecreaseInterfaceScale => "mod--",
+            ShortcutId::ResetInterfaceScale => "mod-0",
             ShortcutId::CaptureAppshot if mac => "ctrl-alt-space",
             ShortcutId::CaptureAppshot => "mod-alt-space",
             ShortcutId::SaveFile => "mod-s",
@@ -1220,6 +1239,9 @@ pub struct KeymapConfig {
     #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), serde(skip))]
     pub capture_appshot: String,
     pub random_wallpaper: String,
+    pub increase_interface_scale: String,
+    pub decrease_interface_scale: String,
+    pub reset_interface_scale: String,
     pub save_file: String,
     pub browser_reload: String,
     pub toggle_sidebar: String,
@@ -1274,7 +1296,7 @@ pub fn sidebar_pin_profile_key(
             }
             let org_id = token_org_id
                 .or(development_org_id.filter(|org_id| !org_id.is_empty()))
-                .unwrap_or(zeron_engine::DEFAULT_ORG_ID);
+                .unwrap_or(paku_engine::DEFAULT_ORG_ID);
             Some(format!("development:{org_id}:{user_id}"))
         }
     }
@@ -1286,6 +1308,9 @@ impl Default for KeymapConfig {
             toggle_dictation: ShortcutId::ToggleDictation.default_combo().into(),
             capture_appshot: ShortcutId::CaptureAppshot.default_combo().into(),
             random_wallpaper: ShortcutId::RandomWallpaper.default_combo().into(),
+            increase_interface_scale: ShortcutId::IncreaseInterfaceScale.default_combo().into(),
+            decrease_interface_scale: ShortcutId::DecreaseInterfaceScale.default_combo().into(),
+            reset_interface_scale: ShortcutId::ResetInterfaceScale.default_combo().into(),
             save_file: ShortcutId::SaveFile.default_combo().into(),
             browser_reload: ShortcutId::BrowserReload.default_combo().into(),
             toggle_sidebar: ShortcutId::ToggleSidebar.default_combo().into(),
@@ -1309,6 +1334,9 @@ impl KeymapConfig {
             ShortcutId::ToggleDictation => &self.toggle_dictation,
             ShortcutId::CaptureAppshot => &self.capture_appshot,
             ShortcutId::RandomWallpaper => &self.random_wallpaper,
+            ShortcutId::IncreaseInterfaceScale => &self.increase_interface_scale,
+            ShortcutId::DecreaseInterfaceScale => &self.decrease_interface_scale,
+            ShortcutId::ResetInterfaceScale => &self.reset_interface_scale,
             ShortcutId::SaveFile => &self.save_file,
             ShortcutId::BrowserReload => &self.browser_reload,
             ShortcutId::ToggleSidebar => &self.toggle_sidebar,
@@ -1334,6 +1362,9 @@ impl KeymapConfig {
             ShortcutId::ToggleDictation => self.toggle_dictation = combo,
             ShortcutId::CaptureAppshot => self.capture_appshot = combo,
             ShortcutId::RandomWallpaper => self.random_wallpaper = combo,
+            ShortcutId::IncreaseInterfaceScale => self.increase_interface_scale = combo,
+            ShortcutId::DecreaseInterfaceScale => self.decrease_interface_scale = combo,
+            ShortcutId::ResetInterfaceScale => self.reset_interface_scale = combo,
             ShortcutId::SaveFile => self.save_file = combo,
             ShortcutId::BrowserReload => self.browser_reload = combo,
             ShortcutId::ToggleSidebar => self.toggle_sidebar = combo,
@@ -1511,6 +1542,10 @@ pub fn display_combo(combo: &str) -> String {
 
 /// [`display_combo`] for an explicit platform (see [`combo_from_keystroke_on`]).
 pub fn display_combo_on(mac: bool, combo: &str) -> String {
+    // GPUI spells the minus key as a trailing "--", not two empty keys.
+    if let Some(modifiers) = combo.strip_suffix("--") {
+        return format!("{}+-", display_combo_on(mac, modifiers));
+    }
     combo
         .split('-')
         .map(|part| match part {
@@ -1542,8 +1577,13 @@ pub fn badge_combo_on(mac: bool, combo: &str) -> String {
     if !mac {
         return display_combo_on(false, combo);
     }
-    let mut parts: Vec<&str> = combo.split('-').collect();
-    let key = parts.pop().unwrap_or("");
+    let (parts, key) = if let Some(modifiers) = combo.strip_suffix("--") {
+        (modifiers.split('-').collect::<Vec<_>>(), "-")
+    } else {
+        let mut parts: Vec<&str> = combo.split('-').collect();
+        let key = parts.pop().unwrap_or("");
+        (parts, key)
+    };
     let mut out = String::new();
     for glyph in ["ctrl", "alt", "shift", "mod"]
         .iter()
@@ -1574,7 +1614,7 @@ impl UiSettings {
             .or_default()
     }
 
-    pub fn skill_completion(&self, harness: zeron_proto::HarnessId) -> SkillCompletionSettings {
+    pub fn skill_completion(&self, harness: paku_proto::HarnessId) -> SkillCompletionSettings {
         self.skill_completion_by_harness
             .get(&harness)
             .copied()
@@ -1665,6 +1705,7 @@ impl UiSettings {
             git_history_author_display,
             ui_font_family,
             ui_font_size,
+            ui_scale,
             terminal_font_family,
             terminal_font_size,
             code_font_family,
@@ -1674,7 +1715,7 @@ impl UiSettings {
             diff_wrap,
             code_fences_fit_content,
             transcript_width,
-            open_web_links_in_zeron,
+            open_web_links_in_paku,
             transcript_compact_mode,
             files_autosave_enabled,
             files_autosave_delay_ms,
@@ -1739,6 +1780,7 @@ impl UiSettings {
         self.git_history_column_widths = self.git_history_column_widths.clamped();
         self.git_history_column_order = self.git_history_column_order.normalized();
         self.ui_font_size = self.ui_font_size.normalized();
+        self.ui_scale = crate::ui_scale::normalize(self.ui_scale);
         if let Some(background) = self.new_thread_composer_background.as_mut() {
             background.adjustment = background.adjustment.normalized();
         }
@@ -1828,7 +1870,12 @@ impl UiSettings {
                         .get_mut("keymap")
                         .and_then(serde_json::Value::as_object_mut)
                     {
-                        for (id, field) in [(ShortcutId::ToggleFiles, "toggleFiles")] {
+                        for (id, field) in [
+                            (ShortcutId::ToggleFiles, "toggleFiles"),
+                            (ShortcutId::IncreaseInterfaceScale, "increaseInterfaceScale"),
+                            (ShortcutId::DecreaseInterfaceScale, "decreaseInterfaceScale"),
+                            (ShortcutId::ResetInterfaceScale, "resetInterfaceScale"),
+                        ] {
                             let default = platform_combo(id.default_combo());
                             let taken = !keymap.contains_key(field)
                                 && keymap.values().any(|existing| {
@@ -1866,10 +1913,10 @@ impl UiSettings {
     }
 
     fn migrated(mut self) -> Self {
-        if self.accent == zeron_theme::AccentSelection::ThemeDefault
+        if self.accent == paku_theme::AccentSelection::ThemeDefault
             && let Some(accent) = self.legacy_accent_color.take()
         {
-            self.accent = zeron_theme::AccentSelection::Preset(accent.into());
+            self.accent = paku_theme::AccentSelection::Preset(accent.into());
         }
         self.legacy_accent_color = None;
         self
@@ -1896,7 +1943,7 @@ fn min_or(value: f32, min: f32, default: f32) -> f32 {
     }
 }
 
-pub use zeron_proto::SidebarSection;
+pub use paku_proto::SidebarSection;
 
 #[cfg(test)]
 mod tests {
@@ -1904,7 +1951,7 @@ mod tests {
 
     #[test]
     fn skill_completion_defaults_overrides_and_persistence_are_per_harness() {
-        use zeron_proto::HarnessId;
+        use paku_proto::HarnessId;
         let dir = tempfile::tempdir().unwrap();
         let mut settings = UiSettings::default();
         for (harness, _) in SKILL_COMPLETION_HARNESSES {
@@ -1912,18 +1959,12 @@ mod tests {
             assert!(preferences.dollar);
             assert!(preferences.separate_from_slash);
         }
+        assert_eq!(SKILL_COMPLETION_HARNESSES, [(HarnessId::Pi, "Pi")]);
         settings.skill_completion_by_harness.insert(
-            HarnessId::ClaudeCode,
+            HarnessId::Pi,
             SkillCompletionSettings {
                 dollar: false,
                 separate_from_slash: true,
-            },
-        );
-        settings.skill_completion_by_harness.insert(
-            HarnessId::Opencode,
-            SkillCompletionSettings {
-                dollar: true,
-                separate_from_slash: false,
             },
         );
         settings.save(dir.path()).unwrap();
@@ -1932,15 +1973,11 @@ mod tests {
             settings.skill_completion_by_harness,
             loaded.skill_completion_by_harness
         );
-        assert!(!loaded.skill_completion(HarnessId::ClaudeCode).dollar);
-        assert!(loaded.skill_completion(HarnessId::Cursor).dollar);
+        assert!(!loaded.skill_completion(HarnessId::Pi).dollar);
+        assert!(loaded.skill_completion(HarnessId::Mock).dollar);
         let legacy: UiSettings = serde_json::from_str(r#"{"skillsInSlashMenu":true}"#).unwrap();
-        assert!(
-            !legacy
-                .skill_completion(HarnessId::Codex)
-                .separate_from_slash
-        );
-        assert!(legacy.skill_completion(HarnessId::Codex).dollar);
+        assert!(!legacy.skill_completion(HarnessId::Pi).separate_from_slash);
+        assert!(legacy.skill_completion(HarnessId::Pi).dollar);
     }
 
     #[test]
@@ -1978,7 +2015,7 @@ mod tests {
 
         let loaded = UiSettings::load(dir.path());
         assert_eq!(loaded.composer_send_behavior, ComposerSendBehavior::Enter);
-        assert!(loaded.open_web_links_in_zeron);
+        assert!(loaded.open_web_links_in_paku);
         assert!(loaded.new_thread_composer_background.is_none());
         assert_eq!(
             loaded.new_thread_background_effect,
@@ -2704,7 +2741,8 @@ mod tests {
             git_history_author_display: GitHistoryAuthorDisplay::Name,
             ui_font_family: crate::typography::UiFontFamily::Installed("Arial".into()),
             ui_font_size: crate::typography::UiFontSize::ALL[5],
-            theme_selection: zeron_theme::ThemeSelection {
+            ui_scale: 1.5,
+            theme_selection: paku_theme::ThemeSelection {
                 light: "catppuccin-latte".into(),
                 dark: "catppuccin-mocha".into(),
             },
@@ -2712,7 +2750,7 @@ mod tests {
             diff_wrap: true,
             code_fences_fit_content: true,
             transcript_width: 960.0,
-            open_web_links_in_zeron: false,
+            open_web_links_in_paku: false,
             transcript_compact_mode: true,
             files_autosave_enabled: true,
             files_autosave_delay_ms: 1_500,
@@ -2722,10 +2760,10 @@ mod tests {
             code_font_family: crate::typography::UiFontFamily::Geist,
             code_font_size: 11.0,
             files_show_all: true,
-            accent: zeron_theme::AccentSelection::Preset(zeron_theme::AccentPreset::Cyan),
-            surface: zeron_theme::SurfacePreference::Frosted,
+            accent: paku_theme::AccentSelection::Preset(paku_theme::AccentPreset::Cyan),
+            surface: paku_theme::SurfacePreference::Frosted,
             new_thread_composer_background: Some(NewThreadComposerBackground {
-                path: "/tmp/zeron/new-thread-background.png".into(),
+                path: "/tmp/paku/new-thread-background.png".into(),
                 name: "background.png".into(),
                 adjustment: NewThreadBackgroundAdjustment {
                     focal_x: 0.25,
@@ -2748,7 +2786,7 @@ mod tests {
         assert!(json.contains(r#""diffWrap": true"#));
         assert_eq!(UiSettings::load(dir.path()), settings);
         assert!(json.contains(r#""codeFencesFitContent": true"#));
-        assert!(json.contains(r#""openWebLinksInZeron": false"#));
+        assert!(json.contains(r#""openWebLinksInPaku": false"#));
         assert!(json.contains(r#""newThreadBackgroundEffect": "ascii""#));
         assert!(json.contains(r#""focalX": 0.25"#));
         assert!(json.contains(r#""focalY": 0.75"#));
@@ -2889,8 +2927,8 @@ mod tests {
         .unwrap();
         let loaded = UiSettings::load(dir.path());
         assert_eq!(loaded.appearance, crate::appearance::AppearanceMode::System);
-        assert_eq!(loaded.accent, zeron_theme::AccentSelection::ThemeDefault);
-        assert_eq!(loaded.surface, zeron_theme::SurfacePreference::ThemeDefault);
+        assert_eq!(loaded.accent, paku_theme::AccentSelection::ThemeDefault);
+        assert_eq!(loaded.surface, paku_theme::SurfacePreference::ThemeDefault);
         assert_eq!(loaded.sidebar_width, 300.0);
         assert!(loaded.sidebar_pinned_session_ids_by_profile.is_empty());
         assert!(!loaded.sound_enabled, "other keys still parse");
@@ -2977,7 +3015,7 @@ mod tests {
         let loaded = UiSettings::load(dir.path());
         assert_eq!(
             loaded.accent,
-            zeron_theme::AccentSelection::Preset(zeron_theme::AccentPreset::Cyan)
+            paku_theme::AccentSelection::Preset(paku_theme::AccentPreset::Cyan)
         );
         loaded.save(dir.path()).unwrap();
         let saved = std::fs::read_to_string(UiSettings::path(dir.path())).unwrap();
@@ -3007,6 +3045,112 @@ mod tests {
     }
 
     #[test]
+    fn interface_scale_defaults_and_round_trips_without_rewriting_fonts() {
+        let legacy: UiSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.ui_scale, 1.0);
+        assert_eq!(legacy.ui_font_size.pixels(), 16.0);
+        let dir = tempfile::tempdir().unwrap();
+        for scale in crate::ui_scale::PRESETS {
+            let settings = UiSettings {
+                ui_scale: scale,
+                ui_font_size: crate::typography::UiFontSize::ALL[7],
+                terminal_font_size: 18.0,
+                code_font_size: 14.0,
+                sound_enabled: false,
+                ..Default::default()
+            };
+            settings.save(dir.path()).unwrap();
+            assert_eq!(UiSettings::load(dir.path()), settings);
+            let value = serde_json::to_value(&settings).unwrap();
+            assert_eq!(value["uiScale"].as_f64(), Some(f64::from(scale)));
+        }
+    }
+
+    #[test]
+    fn interface_scale_heals_invalid_values_without_discarding_other_settings() {
+        for value in ["null", "\"NaN\"", "\"future\"", "{}", "[]", "true", "1e100"] {
+            let settings: UiSettings = serde_json::from_str(&format!(
+                r#"{{"uiScale":{value},"soundEnabled":false,"uiFontSize":28}}"#
+            ))
+            .unwrap();
+            assert_eq!(settings.ui_scale, 1.0, "{value}");
+            assert!(!settings.sound_enabled);
+            assert_eq!(settings.ui_font_size.pixels(), 28.0);
+        }
+        for (input, expected) in [(-1.0, 0.75), (0.0, 0.75), (1.37, 1.37), (9.0, 2.0)] {
+            let loaded: UiSettings = serde_json::from_value(serde_json::json!({
+                "uiScale": input,
+            }))
+            .unwrap();
+            assert_eq!(loaded.ui_scale, expected);
+        }
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let settings = UiSettings {
+                ui_scale: invalid,
+                ..Default::default()
+            };
+            assert_eq!(settings.clone().clamped().ui_scale, 1.0);
+            assert_eq!(serde_json::to_value(&settings).unwrap()["uiScale"], 1.0);
+        }
+    }
+
+    #[test]
+    fn stale_settings_merge_preserves_independent_interface_scale() {
+        let base = UiSettings::default();
+        let edited = UiSettings {
+            sidebar_width: 300.0,
+            ..base.clone()
+        };
+        let current = UiSettings {
+            ui_scale: 1.5,
+            code_font_size: 18.0,
+            ..base.clone()
+        };
+        let merged = UiSettings::merge_changes(&base, &edited, current);
+        assert_eq!(merged.ui_scale, 1.5);
+        assert_eq!(merged.code_font_size, 18.0);
+        assert_eq!(merged.sidebar_width, 300.0);
+    }
+
+    #[test]
+    fn interface_zoom_shortcuts_default_and_rebind_on_both_platforms() {
+        let mut keymap = KeymapConfig::default();
+        for (id, combo) in [
+            (ShortcutId::IncreaseInterfaceScale, "mod-+"),
+            (ShortcutId::DecreaseInterfaceScale, "mod--"),
+            (ShortcutId::ResetInterfaceScale, "mod-0"),
+        ] {
+            assert_eq!(keymap.get(id), combo);
+            for mac in [false, true] {
+                assert_eq!(id.default_combo_on(mac), combo);
+                assert!(gpui::Keystroke::parse(&platform_combo_on(mac, combo)).is_ok());
+            }
+            keymap.set(id, "mod-alt-z".into());
+            assert_eq!(keymap.get(id), "mod-alt-z");
+            keymap.reset(id);
+            assert_eq!(keymap.get(id), combo);
+        }
+        assert_eq!(display_combo_on(false, "mod--"), "Ctrl+-");
+        assert_eq!(badge_combo_on(true, "mod--"), "⌘-");
+    }
+
+    #[test]
+    fn new_zoom_shortcut_does_not_steal_a_persisted_custom_chord() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            UiSettings::path(dir.path()),
+            r#"{
+            "keymap":{"saveFile":"mod-0"},"soundEnabled":false
+        }"#,
+        )
+        .unwrap();
+        let loaded = UiSettings::load(dir.path());
+        assert_eq!(loaded.keymap.save_file, "mod-0");
+        assert_eq!(loaded.keymap.reset_interface_scale, "");
+        assert!(!loaded.sound_enabled);
+    }
+
+    #[test]
     fn unsupported_ui_font_size_snaps_to_the_nearest_choice() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -3017,6 +3161,26 @@ mod tests {
         let loaded = UiSettings::load(dir.path());
         assert_eq!(loaded.ui_font_size.pixels(), 18.0);
         assert!(!loaded.sound_enabled);
+    }
+
+    #[test]
+    fn larger_ui_sizes_survive_settings_save_and_reload() {
+        for pixels in [24, 28, 32] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(
+                UiSettings::path(dir.path()),
+                format!(r#"{{"uiFontSize": {pixels}, "soundEnabled": false}}"#),
+            )
+            .unwrap();
+            let loaded = UiSettings::load(dir.path());
+            assert_eq!(loaded.ui_font_size.pixels(), pixels as f32);
+            assert!(!loaded.sound_enabled);
+            loaded.save(dir.path()).unwrap();
+            assert_eq!(
+                UiSettings::load(dir.path()).ui_font_size,
+                loaded.ui_font_size
+            );
+        }
     }
 
     #[test]
@@ -3045,7 +3209,7 @@ mod tests {
 
     fn signed_in(user_id: &str, org_id: Option<&str>) -> AuthState {
         AuthState::SignedIn {
-            user: zeron_proto::UserProfile {
+            user: paku_proto::UserProfile {
                 id: user_id.to_string(),
                 email: format!("{user_id}@example.com"),
                 name: None,
@@ -3292,7 +3456,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_match_zeron() {
+    fn defaults_match_paku() {
         let d = UiSettings::default();
         assert_eq!(d.sidebar_width, 256.0);
         assert_eq!(d.right_pane_width, 520.0);
@@ -3473,15 +3637,14 @@ mod tests {
                 // Via the platform spelling, where modifier names are
                 // unambiguous, so the decode can't inherit the bug it checks.
                 let bound = platform_combo_on(mac, combo);
-                let mut parts: Vec<&str> = bound.split('-').collect();
-                let key = parts.pop().expect("a combo always ends in a key");
+                let keystroke = gpui::Keystroke::parse(&bound).unwrap();
                 let recorded = combo_from_keystroke_on(
                     mac,
-                    parts.contains(&"ctrl"),
-                    parts.contains(&"alt"),
-                    parts.contains(&"shift"),
-                    parts.contains(&"cmd"),
-                    key,
+                    keystroke.modifiers.control,
+                    keystroke.modifiers.alt,
+                    keystroke.modifiers.shift,
+                    keystroke.modifiers.platform,
+                    &keystroke.key,
                 );
                 assert_eq!(
                     recorded.as_deref(),

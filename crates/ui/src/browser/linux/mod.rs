@@ -15,6 +15,31 @@ use std::{
 };
 use tokio::sync::mpsc::Sender;
 
+/// This is native DPI * UI zoom, not native DPI alone. Keep it identical
+/// across viewport allocation, helper rendering and inverse caret conversion.
+fn effective_browser_scale(scale: f32) -> f32 {
+    if scale.is_finite() && scale > 0. {
+        scale
+    } else {
+        1.
+    }
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::effective_browser_scale;
+
+    #[test]
+    fn effective_scale_preserves_high_dpi_and_whole_ui_zoom() {
+        for scale in [0.375, 0.75, 1., 1.5, 4.5, 6., 9.] {
+            assert_eq!(effective_browser_scale(scale), scale);
+        }
+        for scale in [0., -1., f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(effective_browser_scale(scale), 1.);
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum NativeEvent {
     Changed,
@@ -52,13 +77,13 @@ struct Route {
 
 fn helper_path() -> Result<std::path::PathBuf, String> {
     use sha2::{Digest, Sha256};
-    const HELPER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/zeron-webkit"));
+    const HELPER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/paku-webkit"));
     let hash = format!("{:x}", Sha256::digest(HELPER));
     let root = std::env::var_os("XDG_CACHE_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|p| std::path::PathBuf::from(p).join(".cache")))
         .ok_or("Could not locate the browser cache directory")?
-        .join("zeron/browser");
+        .join("paku/browser");
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let path = root.join(format!("webkit-{hash}"));
     if std::fs::read(&path).ok().as_deref() != Some(HELPER) {
@@ -119,7 +144,7 @@ impl BrowserData {
                             let width = u32::from_le_bytes(data[..4].try_into().unwrap());
                             let height = u32::from_le_bytes(data[4..8].try_into().unwrap());
                             let scale=f32::from_bits(u32::from_le_bytes(data[8..12].try_into().unwrap()));
-                            if !scale.is_finite() || !(0.5..=4.).contains(&scale) {continue;}
+                            if !scale.is_finite() || scale <= 0. {continue;}
                             data.drain(..12);
                             let Some(pixels) = image::RgbaImage::from_raw(width, height, data) else { continue; };
                             *route.frame.lock().unwrap() = Some((Arc::new(RenderImage::new([image::Frame::new(pixels)])),scale));
@@ -267,6 +292,7 @@ impl NativePage {
         }
     }
     pub fn sync(&mut self, bounds: Bounds<Pixels>, scale: f32) {
+        let scale = effective_browser_scale(scale);
         self.bounds = bounds;
         self.scale = scale;
         let geometry = (

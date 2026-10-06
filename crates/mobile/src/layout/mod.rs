@@ -9,8 +9,8 @@
 //! frame's prepared rows (pure arithmetic, no measurement).
 
 pub mod display;
-mod markdown;
 mod file_icons;
+mod markdown;
 mod rows;
 mod style;
 mod tools;
@@ -21,17 +21,17 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Instant;
 
-use zeron_doc::parts::MessagePart;
-use zeron_doc::parts::MessageStatus;
-use zeron_doc::schema::{MessageRole, SessionMessageEntry};
-use zeron_text::WidthCache;
+use paku_doc::parts::MessagePart;
+use paku_doc::parts::MessageStatus;
+use paku_doc::schema::{MessageRole, SessionMessageEntry};
+use paku_text::WidthCache;
 
 use display::{DisplayBuilder, RowDisplay};
 use markdown::{Ctx, Px};
-pub use rows::{PendingUser, RowKind, TranscriptInput};
 use rows::{Gap, Placed, RowBuilder, RowCore, place_row};
-pub use style::{FaceRole, StyleDesc};
+pub use rows::{PendingUser, RowKind, TranscriptInput};
 use style::Typography;
+pub use style::{FaceRole, StyleDesc};
 
 /// Measures text the bundled faces can't render (emoji, CJK…) with the
 /// platform's own text engine — pretext's "browser as ground truth".
@@ -52,19 +52,22 @@ struct MeasurerBridge {
     styles: Arc<Mutex<HashMap<u16, StyleDesc>>>,
 }
 
-impl zeron_text::FallbackMeasurer for MeasurerBridge {
-    fn measure(&self, style: zeron_text::StyleId, text: &str) -> f32 {
+impl paku_text::FallbackMeasurer for MeasurerBridge {
+    fn measure(&self, style: paku_text::StyleId, text: &str) -> f32 {
         let Some(desc) = self.styles.lock().unwrap().get(&style.0).cloned() else {
             return 0.0;
         };
-        self.platform.measure(desc.face, desc.size, desc.ligatures, text.to_owned())
+        self.platform
+            .measure(desc.face, desc.size, desc.ligatures, text.to_owned())
     }
 
-    fn measure_run(&self, style: zeron_text::StyleId, text: &str, advances: &mut Vec<f32>) -> bool {
+    fn measure_run(&self, style: paku_text::StyleId, text: &str, advances: &mut Vec<f32>) -> bool {
         let Some(desc) = self.styles.lock().unwrap().get(&style.0).cloned() else {
             return false;
         };
-        let run = self.platform.measure_run(desc.face, desc.size, desc.ligatures, text.to_owned());
+        let run = self
+            .platform
+            .measure_run(desc.face, desc.size, desc.ligatures, text.to_owned());
         if run.len() != text.chars().count() {
             return false;
         }
@@ -91,7 +94,10 @@ impl TextSystem {
     #[uniffi::constructor]
     pub fn new(faces: Vec<FaceData>, measurer: Option<Arc<dyn PlatformMeasurer>>) -> Arc<Self> {
         Arc::new(Self {
-            faces: faces.into_iter().map(|f| (f.role, Arc::new(f.bytes))).collect(),
+            faces: faces
+                .into_iter()
+                .map(|f| (f.role, Arc::new(f.bytes)))
+                .collect(),
             measurer,
         })
     }
@@ -168,7 +174,10 @@ impl LayoutFrame {
 
     /// Approximate heap held by prepared text across all rows (diagnostics).
     pub fn prepared_heap_bytes(&self) -> u64 {
-        self.rows.iter().map(|r| rows::content_heap_bytes(&r.core.content) as u64).sum()
+        self.rows
+            .iter()
+            .map(|r| rows::content_heap_bytes(&r.core.content) as u64)
+            .sum()
     }
 
     /// Rows intersecting `[y0, y1)`.
@@ -183,12 +192,20 @@ impl LayoutFrame {
     }
 
     pub fn placement(&self, index: u32) -> Option<RowPlacement> {
-        self.rows.get(index as usize).map(|r| self.placement_of(index as usize, r))
+        self.rows
+            .get(index as usize)
+            .map(|r| self.placement_of(index as usize, r))
     }
 
     pub fn index_of(&self, key: u64) -> Option<u32> {
         self.index
-            .get_or_init(|| self.rows.iter().enumerate().map(|(i, r)| (r.core.key, i as u32)).collect())
+            .get_or_init(|| {
+                self.rows
+                    .iter()
+                    .enumerate()
+                    .map(|(i, r)| (r.core.key, i as u32))
+                    .collect()
+            })
             .get(&key)
             .copied()
     }
@@ -232,7 +249,11 @@ impl LayoutFrame {
                 continue;
             }
             if !out.is_empty() {
-                out.push_str(if last == Some(&*r.core.entry_id) { "\n\n" } else { "\n\n---\n\n" });
+                out.push_str(if last == Some(&*r.core.entry_id) {
+                    "\n\n"
+                } else {
+                    "\n\n---\n\n"
+                });
             }
             out.push_str(&r.core.copy_text);
             last = Some(&r.core.entry_id);
@@ -294,27 +315,39 @@ pub(crate) const FIXTURE: &str = include_str!("fixture.md");
 /// offsets of each line start — the accuracy harness compares these with
 /// CoreText's own framesetter (platform engine as ground truth).
 #[uniffi::export]
-pub fn debug_line_starts(text_system: Arc<TextSystem>, face: FaceRole, size: f32, width: f32, text: String) -> Vec<u32> {
+pub fn debug_line_starts(
+    text_system: Arc<TextSystem>,
+    face: FaceRole,
+    size: f32,
+    width: f32,
+    text: String,
+) -> Vec<u32> {
     let styles = Arc::new(Mutex::new(HashMap::new()));
     let fallback = text_system.measurer.clone().map(|platform| {
-        Arc::new(MeasurerBridge { platform, styles: styles.clone() }) as Arc<dyn zeron_text::FallbackMeasurer>
+        Arc::new(MeasurerBridge {
+            platform,
+            styles: styles.clone(),
+        }) as Arc<dyn paku_text::FallbackMeasurer>
     });
     let mut typo = Typography::new(&text_system.faces, fallback, styles);
     let (family, weight, italic) = style::decompose(face);
     let style = typo.style(family, weight, italic, size);
-    let spans = [zeron_text::Span::new(0..text.len(), style.id)];
-    let p = zeron_text::prepare(
+    let spans = [paku_text::Span::new(0..text.len(), style.id)];
+    let p = paku_text::prepare(
         &typo.book,
         &mut WidthCache::new(),
         &text,
         if text.is_empty() { &[] } else { &spans },
-        &zeron_text::PrepareOptions {
-            white_space: zeron_text::WhiteSpace::PreWrap,
-            overflow_wrap: zeron_text::OverflowWrap::Anywhere,
+        &paku_text::PrepareOptions {
+            white_space: paku_text::WhiteSpace::PreWrap,
+            overflow_wrap: paku_text::OverflowWrap::Anywhere,
             ..Default::default()
         },
     );
-    p.lines(width).iter().map(|l| p.utf16_offset(l.range.start) as u32).collect()
+    p.lines(width)
+        .iter()
+        .map(|l| p.utf16_offset(l.range.start) as u32)
+        .collect()
 }
 
 /// A debug/demo transcript entry (markdown text), for fixtures and benches.
@@ -344,7 +377,7 @@ pub struct TranscriptView {
     tx: Mutex<Sender<Msg>>,
     shared: Arc<Shared>,
     /// Live session subscription (Rust→Rust; rows never cross FFI).
-    watch: Mutex<Option<zeron_client::SnapshotWatch>>,
+    watch: Mutex<Option<paku_client::SnapshotWatch>>,
 }
 
 #[uniffi::export]
@@ -357,7 +390,7 @@ impl TranscriptView {
         });
         let worker_shared = shared.clone();
         thread::Builder::new()
-            .name("zeron-layout".into())
+            .name("paku-layout".into())
             .spawn(move || Worker::new(&text, worker_shared, listener).run(rx))
             .expect("spawn layout thread");
         Arc::new(Self {
@@ -456,10 +489,18 @@ pub(crate) fn debug_input(entries: Vec<DebugEntry>, working: bool) -> Transcript
                         text: e.text,
                     }],
                     id: e.id,
-                    role: if e.user { MessageRole::User } else { MessageRole::Assistant },
+                    role: if e.user {
+                        MessageRole::User
+                    } else {
+                        MessageRole::Assistant
+                    },
                     created_at: 0,
                     device_id: String::new(),
-                    status: Some(if e.streaming { MessageStatus::Streaming } else { MessageStatus::Complete }),
+                    status: Some(if e.streaming {
+                        MessageStatus::Streaming
+                    } else {
+                        MessageStatus::Complete
+                    }),
                     continuation_of: None,
                     duration_ms: None,
                 })
@@ -498,7 +539,7 @@ impl Worker {
             Arc::new(MeasurerBridge {
                 platform,
                 styles: styles.clone(),
-            }) as Arc<dyn zeron_text::FallbackMeasurer>
+            }) as Arc<dyn paku_text::FallbackMeasurer>
         });
         Self {
             typo: Typography::new(&text.faces, fallback, styles),
@@ -545,7 +586,9 @@ impl Worker {
                         dirty = true;
                     }
                     Msg::Toggle(key) => {
-                        if !self.builder.expanded.remove(&key) && !self.builder.collapsed.remove(&key) {
+                        if !self.builder.expanded.remove(&key)
+                            && !self.builder.collapsed.remove(&key)
+                        {
                             // First toggle flips the row's default.
                             if self.is_open(key) {
                                 self.builder.collapsed.insert(key);
@@ -598,7 +641,11 @@ impl Worker {
         let mut live = HashMap::with_capacity(placed.len());
         for p in placed {
             let height = match self.heights.remove(&p.core.key) {
-                Some(m) if Arc::ptr_eq(&m.core, &p.core) && m.gap == p.gap && m.width == self.width => m.height,
+                Some(m)
+                    if Arc::ptr_eq(&m.core, &p.core) && m.gap == p.gap && m.width == self.width =>
+                {
+                    m.height
+                }
                 _ => place_row(&p.core, p.gap, px, self.width, None),
             };
             live.insert(

@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["vendor"]
 members = [
     "crates/voice",
     "crates/theme",
@@ -18,8 +19,12 @@ members = [
     "crates/client",
     "crates/mcp",
     "crates/text",
-    "apps/zeron",
+    "apps/paku",
 ]
+
+# One patched core for direct users and git siblings (platform, tokio, gpui-base).
+[patch."https://github.com/zeronsh/zui"]
+gpui = { path = "vendor/gpui" }
 
 [workspace.package]
 version = "0.2.104"
@@ -28,22 +33,22 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
-zeron-proto = { path = "crates/proto" }
-zeron-preview = { path = "crates/preview" }
-zeron-doc = { path = "crates/doc" }
-zeron-sync = { path = "crates/sync" }
-zeron-harness = { path = "crates/harness" }
-zeron-engine = { path = "crates/engine" }
-zeron-rpc = { path = "crates/rpc" }
-zeron-update = { path = "crates/update" }
-zeron-ui = { path = "crates/ui" }
-zeron-syntax = { path = "crates/syntax" }
-zeron-markdown = { path = "crates/markdown" }
-zeron-mobile = { path = "crates/mobile" }
-zeron-client = { path = "crates/client" }
-zeron-theme = { path = "crates/theme" }
-zeron-mcp = { path = "crates/mcp" }
-zeron-text = { path = "crates/text" }
+paku-proto = { path = "crates/proto" }
+paku-preview = { path = "crates/preview" }
+paku-doc = { path = "crates/doc" }
+paku-sync = { path = "crates/sync" }
+paku-harness = { path = "crates/harness" }
+paku-engine = { path = "crates/engine" }
+paku-rpc = { path = "crates/rpc" }
+paku-update = { path = "crates/update" }
+paku-ui = { path = "crates/ui" }
+paku-syntax = { path = "crates/syntax" }
+paku-markdown = { path = "crates/markdown" }
+paku-mobile = { path = "crates/mobile" }
+paku-client = { path = "crates/client" }
+paku-theme = { path = "crates/theme" }
+paku-mcp = { path = "crates/mcp" }
+paku-text = { path = "crates/text" }
 
 # CRDT
 loro = "1.13"
@@ -103,9 +108,6 @@ async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 json5 = "0.4"
-# antigravity writes `settings.json` but reads it back with `hjson.load`, so a
-# user's comments and unquoted keys have to survive our read of the same file.
-deser-hjson = "2.2"
 plist = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 

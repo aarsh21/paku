@@ -3,7 +3,7 @@
 //! tweens; content keeps its final width while the outer surface clips it.
 
 use super::*;
-use zeron_proto::{HarnessId, HarnessUpdatePhase as Phase, HarnessUpdateStatus};
+use paku_proto::{HarnessId, HarnessUpdatePhase as Phase, HarnessUpdateStatus};
 
 pub(super) fn versionless_notification_key(device: &str, harness: HarnessId) -> String {
     format!("{device}:{harness:?}:versionless")
@@ -89,15 +89,7 @@ fn visible_rows(
 
 fn agent_name(harness: HarnessId) -> &'static str {
     match harness {
-        HarnessId::ClaudeCode => "Claude Code",
-        HarnessId::Codex => "Codex",
-        HarnessId::Cursor => "Cursor",
-        HarnessId::Devin => "Devin",
-        HarnessId::Grok => "Grok",
-        HarnessId::Hermes => "Hermes",
         HarnessId::Pi => "Pi",
-        HarnessId::Opencode => "OpenCode",
-        HarnessId::Antigravity => "Antigravity",
         HarnessId::Mock => "Mock",
     }
 }
@@ -811,7 +803,7 @@ impl Shell {
             .iter()
             .map(|device| device.id.clone())
             .chain(std::iter::once(engine.engine_info().device_id.clone()))
-            .filter(|id| state.device_supports(id, zeron_proto::capabilities::HARNESS_UPDATES_V1))
+            .filter(|id| state.device_supports(id, paku_proto::capabilities::HARNESS_UPDATES_V1))
             .map(|id| {
                 let online = state.device_online(&id, Utc::now());
                 (id, online)
@@ -889,7 +881,7 @@ impl Shell {
             .get(&device)
             .is_some_and(|updates| updates.online && updates.connected)
             || !state.device_online(&device, Utc::now())
-            || !state.device_supports(&device, zeron_proto::capabilities::HARNESS_UPDATES_V1)
+            || !state.device_supports(&device, paku_proto::capabilities::HARNESS_UPDATES_V1)
         {
             return;
         }
@@ -900,7 +892,7 @@ impl Shell {
             let result = engine.client().call(method, params).await;
             this.update(cx, |shell, cx| {
                 if let Err(error) = result
-                    && !matches!(&error, zeron_rpc::RpcError::Failed(message)
+                    && !matches!(&error, paku_rpc::RpcError::Failed(message)
                         if method == methods::APPLY_HARNESS_UPDATE && message == "update cancelled")
                 {
                     shell.sidebar_notice = Some(format!("Agent update ({device}): {error}").into());
@@ -920,7 +912,7 @@ mod tests {
 
     fn status(phase: Phase) -> HarnessUpdateStatus {
         HarnessUpdateStatus {
-            harness: HarnessId::Codex,
+            harness: HarnessId::Pi,
             installed_version: Some("1.0".into()),
             latest_version: Some("2.0".into()),
             channel: None,
