@@ -10,6 +10,7 @@ project-palette-fixture = []
 compact-picker-fixture = ["gpui_platform/test-support"]
 
 browser-fixture = []
+dictation-fixture = []
 windows-render-fixture = []
 appshots-fixture = ["gpui_platform/test-support"]
 resource-profile = ["gpui/bench", "gpui_platform/test-support"]
@@ -25,6 +26,10 @@ required-features = ["browser-fixture"]
 [[example]]
 name = "browser-fixture"
 required-features = ["browser-fixture"]
+
+[[example]]
+name = "dictation-fixture"
+required-features = ["dictation-fixture"]
 
 [[example]]
 name = "windows-render-fixture"

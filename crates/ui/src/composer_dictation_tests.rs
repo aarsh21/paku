@@ -437,7 +437,311 @@ fn dictation_completed_send_event_cannot_send_a_replacement_draft(cx: &mut TestA
     });
 }
 
-#[cfg(target_os = "macos")]
+#[gpui::test]
+fn dictation_raw_keyboard_hold_starts_once_and_survives_voice_morph(cx: &mut TestAppContext) {
+    let (dir, handle) = super::tests::composer_focus_window(cx);
+    enable_dictation(dir.path(), cx);
+    let fake = Rc::new(RefCell::new(FakeState::default()));
+    cx.update(|cx| {
+        let fake = fake.clone();
+        cx.set_global(crate::dictation::TestTranscriberFactory(Rc::new(
+            move || Box::new(Fake(fake.clone())),
+        )));
+        crate::shell::apply_keymap(
+            cx,
+            &crate::settings::KeymapConfig::default(),
+            ComposerSendBehavior::Enter,
+        );
+    });
+    let keystroke = gpui::Keystroke::parse(&crate::settings::platform_combo("mod-d")).unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(handle.into(), cx);
+    visual.simulate_modifiers_change(keystroke.modifiers);
+    visual.simulate_event(gpui::KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    handle
+        .update(cx, |composer, _, cx| {
+            assert_eq!(composer.input.read(cx).dictation.phase, Phase::Requesting);
+            assert!(composer.dictation_hold.as_ref().unwrap().started.is_some());
+            composer.input.update(cx, |input, cx| {
+                deliver(input, &fake, [Event::Listening], cx)
+            });
+        })
+        .unwrap();
+    let generation = handle
+        .read_with(cx, |composer, cx| {
+            composer.input.read(cx).dictation.generation
+        })
+        .unwrap();
+    for t in [0., 0.25, 0.5, 0.9, 1.] {
+        handle
+            .update(cx, |composer, _, _| {
+                composer.voice_tween = VoiceTween {
+                    from: t,
+                    to: 1.,
+                    start: Instant::now(),
+                };
+            })
+            .unwrap();
+        cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
+            .unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(handle.into(), cx);
+        #[cfg(target_os = "linux")]
+        {
+            // Replay the user's Linux input shape: release/press repeat pairs,
+            // separated by ~3 ms, rather than only ideal held KeyDown events.
+            visual.simulate_event(gpui::KeyUpEvent {
+                keystroke: keystroke.clone(),
+            });
+            cx.run_until_parked();
+            cx.executor().advance_clock(Duration::from_millis(3));
+            cx.run_until_parked();
+            assert_eq!(
+                fake.borrow().drops,
+                0,
+                "repeat release must not cancel capture"
+            );
+        }
+        visual.simulate_event(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: true,
+            prefer_character_input: false,
+        });
+        handle
+            .read_with(cx, |composer, cx| {
+                let input = composer.input.read(cx);
+                assert_eq!(input.dictation.phase, Phase::Listening, "morph={t}");
+                assert_eq!(input.dictation.generation, generation, "morph={t}");
+                assert!(input.dictation_key.is_some(), "morph={t}");
+                assert!(composer.dictation_hold.is_some(), "morph={t}");
+            })
+            .unwrap();
+        assert_eq!(fake.borrow().finishes, 0);
+        assert_eq!(fake.borrow().drops, 0);
+    }
+    handle
+        .update(cx, |composer, _, _| {
+            composer.dictation_hold.as_mut().unwrap().started =
+                Some(Instant::now() - Duration::from_secs(1));
+        })
+        .unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(handle.into(), cx);
+    visual.simulate_event(gpui::KeyUpEvent {
+        keystroke: gpui::Keystroke::parse("e").unwrap(),
+    });
+    assert_eq!(
+        fake.borrow().finishes,
+        0,
+        "unrelated key-up must not release"
+    );
+    visual.simulate_event(gpui::KeyUpEvent { keystroke });
+    #[cfg(target_os = "linux")]
+    {
+        assert_eq!(fake.borrow().finishes, 0, "wait briefly for a repeat press");
+        cx.run_until_parked();
+        cx.executor().advance_clock(DICTATION_KEY_RELEASE_GRACE);
+        cx.run_until_parked();
+    }
+    assert_eq!(fake.borrow().finishes, 1);
+}
+
+#[cfg(target_os = "linux")]
+fn pending_keyboard_hold(
+    cx: &mut TestAppContext,
+) -> (
+    tempfile::TempDir,
+    gpui::WindowHandle<Composer>,
+    Rc<RefCell<FakeState>>,
+    gpui::Keystroke,
+) {
+    let (dir, handle) = super::tests::composer_focus_window(cx);
+    enable_dictation(dir.path(), cx);
+    cx.update(|cx| {
+        crate::shell::apply_keymap(
+            cx,
+            &crate::settings::KeymapConfig::default(),
+            ComposerSendBehavior::Enter,
+        )
+    });
+    let fake = handle
+        .update(cx, |composer, window, cx| {
+            window.activate_window();
+            composer.input.update(cx, |input, cx| {
+                let fake = start(input, cx);
+                deliver(input, &fake, [Event::Listening], cx);
+                fake
+            })
+        })
+        .unwrap();
+    cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
+        .unwrap();
+    let key = gpui::Keystroke::parse(&crate::settings::platform_combo("mod-d")).unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(handle.into(), cx);
+    visual.simulate_modifiers_change(key.modifiers);
+    visual.simulate_event(gpui::KeyDownEvent {
+        keystroke: key.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    visual.simulate_event(gpui::KeyUpEvent {
+        keystroke: key.clone(),
+    });
+    assert_eq!(fake.borrow().finishes, 0);
+    (dir, handle, fake, key)
+}
+
+#[cfg(target_os = "linux")]
+#[gpui::test]
+fn dictation_pending_release_modifier_blur_and_deactivation_are_immediate(cx: &mut TestAppContext) {
+    let (_dir, handle, fake, _) = pending_keyboard_hold(cx);
+    let mut visual = gpui::VisualTestContext::from_window(handle.into(), cx);
+    visual.simulate_modifiers_change(gpui::Modifiers::default());
+    assert_eq!(fake.borrow().finishes, 1);
+    cx.executor().advance_clock(Duration::from_millis(100));
+    cx.run_until_parked();
+    assert_eq!(fake.borrow().finishes, 1);
+
+    let (_dir2, handle2, fake2, _) = pending_keyboard_hold(cx);
+    handle2
+        .update(cx, |composer, window, cx| {
+            window.focus(&composer.dictation_focus, cx)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        fake2.borrow().finishes,
+        1,
+        "real editor blur releases immediately"
+    );
+    cx.executor().advance_clock(Duration::from_millis(100));
+    cx.run_until_parked();
+    assert_eq!(fake2.borrow().finishes, 1);
+
+    let (_dir3, handle3, fake3, _) = pending_keyboard_hold(cx);
+    let mut visual = gpui::VisualTestContext::from_window(handle3.into(), cx);
+    visual.deactivate_window();
+    assert_eq!(fake3.borrow().drops, 1);
+    handle3
+        .read_with(cx, |composer, cx| {
+            assert!(composer.input.read(cx).dictation_key.is_none())
+        })
+        .unwrap();
+    cx.executor().advance_clock(Duration::from_millis(100));
+    cx.run_until_parked();
+    assert_eq!(
+        fake3.borrow().finishes,
+        0,
+        "deactivation cancels, not finalizes later"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[gpui::test]
+fn dictation_new_binding_cannot_rescue_pending_old_release(cx: &mut TestAppContext) {
+    let (_dir, handle, fake, _) = pending_keyboard_hold(cx);
+    cx.update(|cx| {
+        crate::settings::update(crate::settings::SavePolicy::Immediate, cx, |s| {
+            s.keymap.toggle_dictation = "mod-e".into()
+        });
+        let keymap = crate::settings::current(cx).keymap.clone();
+        crate::shell::apply_keymap(cx, &keymap, ComposerSendBehavior::Enter);
+    });
+    let mut visual = gpui::VisualTestContext::from_window(handle.into(), cx);
+    visual.simulate_event(gpui::KeyDownEvent {
+        keystroke: gpui::Keystroke::parse("ctrl-e").unwrap(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.executor().advance_clock(DICTATION_KEY_RELEASE_GRACE);
+    cx.run_until_parked();
+    assert_eq!(fake.borrow().finishes, 1);
+}
+
+#[cfg(target_os = "linux")]
+#[gpui::test]
+fn dictation_old_release_timer_cannot_finish_a_new_hold(cx: &mut TestAppContext) {
+    let (_dir, handle, old_fake, key) = pending_keyboard_hold(cx);
+    let mut visual = gpui::VisualTestContext::from_window(handle.into(), cx);
+    visual.simulate_modifiers_change(gpui::Modifiers::default());
+    assert_eq!(old_fake.borrow().finishes, 1);
+    let new_fake = handle
+        .update(cx, |composer, _, cx| {
+            composer.input.update(cx, |input, cx| {
+                let fake = start(input, cx);
+                deliver(input, &fake, [Event::Listening], cx);
+                fake
+            })
+        })
+        .unwrap();
+    visual.simulate_modifiers_change(key.modifiers);
+    visual.simulate_event(gpui::KeyDownEvent {
+        keystroke: key.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.executor().advance_clock(Duration::from_millis(100));
+    cx.run_until_parked();
+    assert_eq!(new_fake.borrow().finishes, 0);
+    assert_eq!(new_fake.borrow().drops, 0);
+    // A key-up already lacking the required modifier must not wait for a timer.
+    let mut released = key;
+    released.modifiers = gpui::Modifiers::default();
+    visual.simulate_event(gpui::KeyUpEvent {
+        keystroke: released,
+    });
+    assert_eq!(new_fake.borrow().finishes, 1);
+}
+
+#[cfg(target_os = "linux")]
+#[gpui::test]
+fn dictation_release_uses_observed_time_for_tap_threshold(cx: &mut TestAppContext) {
+    let (_dir, handle, fake, _) = pending_keyboard_hold(cx);
+    let (input, observed_at) = handle
+        .update(cx, |composer, _, cx| {
+            let observed_at = composer
+                .input
+                .read(cx)
+                .dictation_key
+                .as_ref()
+                .unwrap()
+                .pending_release
+                .as_ref()
+                .unwrap()
+                .0;
+            composer.dictation_hold.as_mut().unwrap().started =
+                Some(observed_at - Duration::from_millis(295));
+            (composer.input.clone(), observed_at)
+        })
+        .unwrap();
+    let mut events = cx.events::<DictationInputEvent, _>(&input);
+    cx.executor().advance_clock(DICTATION_KEY_RELEASE_GRACE);
+    cx.run_until_parked();
+    let mut released = None;
+    while let Ok(event) = events.try_recv() {
+        if let DictationInputEvent::Release(at) = event {
+            released = Some(at);
+        }
+    }
+    assert_eq!(
+        released,
+        Some(observed_at),
+        "grace timer and event preserve the original key-up timestamp"
+    );
+    handle
+        .read_with(cx, |composer, cx| {
+            assert_eq!(composer.input.read(cx).dictation.phase, Phase::Tapped)
+        })
+        .unwrap();
+    assert_eq!(
+        fake.borrow().finishes,
+        0,
+        "a delayed 295 ms tap is still a tap"
+    );
+    assert_eq!(fake.borrow().drops, 1);
+}
+
 #[gpui::test]
 fn dictation_shortcut_holds_until_its_modifier_is_released(cx: &mut TestAppContext) {
     let (_dir, handle) = super::tests::composer_focus_window(cx);
@@ -465,17 +769,37 @@ fn dictation_shortcut_holds_until_its_modifier_is_released(cx: &mut TestAppConte
     cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
         .unwrap();
     // Key down and its auto-repeat hold the recording open.
-    cx.simulate_keystrokes(handle.into(), "cmd-d cmd-d");
+    let combo = crate::settings::platform_combo("mod-d");
+    cx.simulate_keystrokes(handle.into(), &format!("{combo} {combo}"));
     cx.run_until_parked();
     assert_eq!(fake.borrow().finishes, 0);
-    let mut visual = gpui::VisualTestContext::from_window(handle.into(), cx);
-    visual.simulate_modifiers_change(gpui::Modifiers::command());
+    // Exercise the fully morphed voice layout, not only the first animation
+    // frame. The editor still owns the keyboard hold after its draft fades.
+    handle
+        .update(cx, |composer, _, _| {
+            composer.voice_tween = VoiceTween {
+                from: 1.,
+                to: 1.,
+                start: Instant::now(),
+            };
+        })
+        .unwrap();
+    cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
+        .unwrap();
+    cx.run_until_parked();
     assert_eq!(
         fake.borrow().finishes,
         0,
-        "D up alone never arrives on macOS"
+        "voice morph must not release the shortcut"
     );
-    // Letting go of Command ends the hold.
+    let mut visual = gpui::VisualTestContext::from_window(handle.into(), cx);
+    visual.simulate_modifiers_change(gpui::Keystroke::parse(&combo).unwrap().modifiers);
+    assert_eq!(
+        fake.borrow().finishes,
+        0,
+        "keeping the bound modifier pressed must retain the hold"
+    );
+    // Letting go of the bound Ctrl/Cmd modifier ends the hold.
     visual.simulate_modifiers_change(gpui::Modifiers::none());
     assert_eq!(fake.borrow().finishes, 1);
     handle

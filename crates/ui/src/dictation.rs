@@ -126,9 +126,18 @@ impl Transcriber for Native {
         }
     }
 }
+#[cfg(any(test, feature = "dictation-fixture"))]
+pub(crate) struct TestTranscriberFactory(pub std::rc::Rc<dyn Fn() -> Box<dyn Transcriber>>);
+#[cfg(any(test, feature = "dictation-fixture"))]
+impl gpui::Global for TestTranscriberFactory {}
+
 pub(crate) fn start(cx: &gpui::App) -> Option<Box<dyn Transcriber>> {
     if !enabled(cx) {
         return None;
+    }
+    #[cfg(any(test, feature = "dictation-fixture"))]
+    if let Some(factory) = cx.try_global::<TestTranscriberFactory>() {
+        return Some((factory.0)());
     }
     let origin_window = origin_window();
     #[cfg(target_os = "macos")]

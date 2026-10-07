@@ -1795,7 +1795,7 @@ enum DictationInputEvent {
     /// The dictation shortcut went down (auto-repeat is ignored)…
     Press,
     /// …and came back up, or focus left the editor while it was held.
-    Release,
+    Release(Instant),
     Changed,
     Submit(u64),
 }
@@ -1803,8 +1803,19 @@ enum DictationInputEvent {
 /// A held dictation shortcut. `keystroke` is the binding, used to recognise
 /// its release: the key coming up, or any of its modifiers being let go
 /// (macOS does not deliver key-up for Command chords).
+fn dictation_modifiers_held(binding: &Keystroke, now: &gpui::Modifiers) -> bool {
+    let bound = &binding.modifiers;
+    (!bound.platform || now.platform)
+        && (!bound.control || now.control)
+        && (!bound.alt || now.alt)
+        && (!bound.shift || now.shift)
+        && (!bound.function || now.function)
+}
+
 struct DictationKey {
     keystroke: Option<Keystroke>,
+    pressed_at: Instant,
+    pending_release: Option<(Instant, Task<()>)>,
     _blur: Subscription,
 }
 
@@ -1827,6 +1838,10 @@ struct DictationHold {
 /// A release sooner than this is a click, not speech: explain hold to talk
 /// instead of transcribing a fraction of a second of audio.
 const DICTATION_TAP: Duration = Duration::from_millis(300);
+// Some Linux compositor/input paths send release/press pairs for repeat.
+// Keep only this modified hold shortcut latched across the short pair gap.
+#[cfg(target_os = "linux")]
+const DICTATION_KEY_RELEASE_GRACE: Duration = Duration::from_millis(50);
 impl EventEmitter<DictationInputEvent> for ComposerInput {}
 
 /// The composer's morph into and out of dictation, and the clock's warning
@@ -2846,31 +2861,50 @@ impl ComposerInput {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.dictation_key.is_some() {
-            return; // Auto-repeat while held.
+        // Mirror `apply_keymap`, including its fallback for an invalid combo.
+        let parse = |combo: &str| Keystroke::parse(&crate::settings::platform_combo(combo)).ok();
+        let keystroke = parse(&crate::settings::current(cx).keymap.toggle_dictation)
+            .or_else(|| parse(crate::settings::ShortcutId::ToggleDictation.default_combo()));
+        if let Some(held) = self.dictation_key.as_mut() {
+            // Only the captured binding can rescue its pending repeat release.
+            // A settings change must not let a different chord extend it.
+            if held.keystroke == keystroke {
+                held.pending_release.take();
+            }
+            return;
         }
         if !crate::dictation::enabled(cx) && !self.dictation.phase.active() {
             // Off by default: let another binding of the same chord run.
             cx.propagate();
             return;
         }
-        // Mirror `apply_keymap`, which binds the default for an unparseable combo.
-        let parse = |combo: &str| Keystroke::parse(&crate::settings::platform_combo(combo)).ok();
-        let keystroke = parse(&crate::settings::current(cx).keymap.toggle_dictation)
-            .or_else(|| parse(crate::settings::ShortcutId::ToggleDictation.default_combo()));
-        let blur = cx.on_blur(&self.focus_handle, window, |input, _, cx| {
-            input.release_dictation_key(cx);
+        let blur = cx.on_blur(&self.focus_handle, window, |input, window, cx| {
+            tracing::info!(target: "paku_ui::dictation", editor_still_focused = input.focus_handle.is_focused(window), "Dictation shortcut editor blur");
+            input.release_dictation_key("editor-blur", cx);
         });
         self.dictation_key = Some(DictationKey {
             keystroke,
+            pressed_at: Instant::now(),
+            pending_release: None,
             _blur: blur,
         });
+        tracing::info!(target: "paku_ui::dictation", "Dictation shortcut pressed");
         cx.emit(DictationInputEvent::Press);
     }
 
-    fn release_dictation_key(&mut self, cx: &mut Context<Self>) {
-        if self.dictation_key.take().is_some() {
-            cx.emit(DictationInputEvent::Release);
+    fn release_dictation_key(&mut self, reason: &'static str, cx: &mut Context<Self>) {
+        if let Some(held) = self.dictation_key.take() {
+            // Input lifecycle only: never log audio or dictated/draft text.
+            tracing::info!(target: "paku_ui::dictation", reason, held_ms = held.pressed_at.elapsed().as_millis() as u64, "Dictation shortcut released");
+            let released_at = if reason == "key-up" {
+                held.pending_release
+                    .as_ref()
+                    .map(|(at, _)| *at)
+                    .unwrap_or_else(Instant::now)
+            } else {
+                Instant::now()
+            };
+            cx.emit(DictationInputEvent::Release(released_at));
         }
     }
 
@@ -2881,7 +2915,38 @@ impl ComposerInput {
                 .is_none_or(|binding| binding.key.eq_ignore_ascii_case(&event.keystroke.key))
         });
         if released {
-            self.release_dictation_key(cx);
+            #[cfg(target_os = "linux")]
+            if self
+                .dictation_key
+                .as_ref()
+                .and_then(|held| held.keystroke.as_ref())
+                .is_some_and(|binding| {
+                    binding.modifiers.number_of_modifiers() > 0
+                        && dictation_modifiers_held(binding, &event.keystroke.modifiers)
+                })
+            {
+                let released_at = Instant::now();
+                let pressed_at = self.dictation_key.as_ref().unwrap().pressed_at;
+                let task = cx.spawn(async move |input, cx| {
+                    cx.background_executor()
+                        .timer(DICTATION_KEY_RELEASE_GRACE)
+                        .await;
+                    let _ = input.update(cx, |input, cx| {
+                        if input
+                            .dictation_key
+                            .as_ref()
+                            .filter(|held| held.pressed_at == pressed_at)
+                            .and_then(|held| held.pending_release.as_ref())
+                            .is_some_and(|(at, _)| *at == released_at)
+                        {
+                            input.release_dictation_key("key-up", cx);
+                        }
+                    });
+                });
+                self.dictation_key.as_mut().unwrap().pending_release = Some((released_at, task));
+                return;
+            }
+            self.release_dictation_key("key-up", cx);
         }
     }
 
@@ -2895,15 +2960,9 @@ impl ComposerInput {
             .dictation_key
             .as_ref()
             .and_then(|held| held.keystroke.as_ref())
-            .is_some_and(|binding| {
-                let (bound, now) = (&binding.modifiers, &event.modifiers);
-                (bound.platform && !now.platform)
-                    || (bound.control && !now.control)
-                    || (bound.alt && !now.alt)
-                    || (bound.shift && !now.shift)
-            });
+            .is_some_and(|binding| !dictation_modifiers_held(binding, &event.modifiers));
         if released {
-            self.release_dictation_key(cx);
+            self.release_dictation_key("modifier-up", cx);
         }
     }
 
@@ -6266,7 +6325,7 @@ impl Composer {
         .detach();
         let dictation_events = cx.subscribe(&input, |this: &mut Self, _, event, cx| match event {
             DictationInputEvent::Press => this.press_dictation(HoldSource::Key, cx),
-            DictationInputEvent::Release => this.release_dictation(HoldSource::Key, cx),
+            DictationInputEvent::Release(at) => this.release_dictation_at(HoldSource::Key, *at, cx),
             DictationInputEvent::Changed => cx.notify(),
             DictationInputEvent::Submit(generation) => {
                 if this.input.read(cx).dictation.generation == *generation
@@ -10029,6 +10088,15 @@ impl Composer {
     /// Letting go transcribes what was said. A tap explains hold to talk,
     /// and a release that only answered the permission prompt records nothing.
     fn release_dictation(&mut self, source: HoldSource, cx: &mut Context<Self>) {
+        self.release_dictation_at(source, Instant::now(), cx);
+    }
+
+    fn release_dictation_at(
+        &mut self,
+        source: HoldSource,
+        released_at: Instant,
+        cx: &mut Context<Self>,
+    ) {
         use crate::dictation::Phase;
         if self
             .dictation_hold
@@ -10041,7 +10109,7 @@ impl Composer {
             .dictation_hold
             .take()
             .and_then(|hold| hold.started)
-            .is_some_and(|started| started.elapsed() < DICTATION_TAP);
+            .is_some_and(|started| released_at.saturating_duration_since(started) < DICTATION_TAP);
         self.input
             .update(cx, |input, cx| match input.dictation.phase {
                 Phase::Requesting if crate::dictation::permission_pending() => {
@@ -10544,6 +10612,7 @@ impl Render for Composer {
             self.dictation_blur = Some(cx.on_focus_out(&focus, window, |this, _, _, cx| {
                 this.input.update(cx, |input, cx| {
                     if !input.dictation.phase.active() {
+                        input.dictation_key.take();
                         return;
                     }
                     if input.dictation.phase == crate::dictation::Phase::Requesting
@@ -10551,6 +10620,7 @@ impl Render for Composer {
                     {
                         return;
                     }
+                    input.dictation_key.take();
                     input.cancel_dictation();
                     cx.emit(DictationInputEvent::Changed);
                     cx.notify();
@@ -10563,6 +10633,7 @@ impl Render for Composer {
                     if !window.is_window_active() {
                         this.input.update(cx, |input, cx| {
                             if !input.dictation.phase.active() {
+                                input.dictation_key.take();
                                 return;
                             }
                             // The permission bridge checks the originating key
@@ -10572,6 +10643,7 @@ impl Render for Composer {
                             {
                                 return;
                             }
+                            input.dictation_key.take();
                             input.cancel_dictation();
                             cx.notify();
                         });

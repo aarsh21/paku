@@ -29,6 +29,8 @@ mod composer_dock;
 mod composer_markdown;
 mod context_usage;
 mod dictation;
+#[cfg(feature = "dictation-fixture")]
+pub mod dictation_fixture;
 pub mod edge_fade;
 pub mod file_icons;
 pub mod files;
